@@ -67,4 +67,11 @@ class Reader:
 
         # If the required bits are more than 8.
         else:
-            return (self.read(8) << (n - 8)) | self.read(n - 8)
+            # Recursive implementation that is in my opinion clearer but
+            # not efficient in Python.
+            # return (self.read(8) << (n - 8)) | self.read(n - 8)
+            res = 0
+            while n > 8:
+                res |= self.read(8) << (n - 8)
+                n -= 8
+            return res | self.read(n)
