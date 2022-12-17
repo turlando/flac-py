@@ -75,3 +75,13 @@ class Reader:
                 res |= self.read(8) << (n - 8)
                 n -= 8
             return res | self.read(n)
+
+    def read_bytes(self, n: int):
+        assert self._bit_offset == 0
+        return self._input.read(n)
+
+    def read_bool(self) -> bool:
+        if self.read(1) == 1:
+            return True
+        else:
+            return False
