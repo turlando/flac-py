@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from enum import Enum
 from functools import reduce
+from typing import Optional
 
 from flac.reader import Reader, extract, mask
 
@@ -92,6 +93,9 @@ class SampleRate:
             case 0b1110:
                 return cls.Uncommon16_10()
 
+    class FromStreaminfo:
+        pass
+
     class Value(Enum):
         V_88_2_kHz = 0b0001
         V_176_4_kHz = 0b0010
@@ -105,8 +109,30 @@ class SampleRate:
         V_48_kHz = 0b1010
         V_96_kHz = 0b1100
 
-    class FromStreaminfo:
-        pass
+        def to_int(self):
+            match self.value:
+                case self.V_88_2_kHz:
+                    return 88_200
+                case self.V_176_4_kHz:
+                    return 176_400
+                case self.V_192_kHz:
+                    return 192_000
+                case self.V_8_kHz:
+                    return 8_000
+                case self.V_16_kHz:
+                    return 16_000
+                case self.V_22_05_kHz:
+                    return 22_050
+                case self.V_24_kHz:
+                    return 24_000
+                case self.V_32_kHz:
+                    return 32_000
+                case self.V_44_1_kHz:
+                    return 44_100
+                case self.V_48_kHz:
+                    return 48_000
+                case self.V_96_kHz:
+                    return 96_000
 
     class Uncommon8:
         pass
@@ -155,14 +181,29 @@ class SampleSize:
         V_24 = 0b110
         V_32 = 0b111
 
+        def to_int(self):
+            match self.value:
+                case self.V_8:
+                    return 8
+                case self.V_12:
+                    return 12
+                case self.V_16:
+                    return 16
+                case self.V_20:
+                    return 20
+                case self.V_24:
+                    return 24
+                case self.V_32:
+                    return 32
+
 
 @dataclass
 class FrameHeader:
     blocking_strategy: BlockingStrategy
-    block_size: BlockSize
-    sample_rate: SampleRate
+    block_size: int
+    sample_rate: Optional[int]
     channels: Channels
-    sample_size: SampleSize
+    sample_size: Optional[int]
     coded_number: int
     crc: int
 
@@ -225,26 +266,43 @@ def decode_frame_header(reader: Reader):
     assert reader.read(1) == 0b0
 
     blocking_strategy = BlockingStrategy(reader.read(1))
-    block_size = BlockSize(reader.read(4))
-    sample_rate = SampleRate(reader.read(4))
+    _block_size = BlockSize(reader.read(4))
+    _sample_rate = SampleRate(reader.read(4))
     channels = Channels(reader.read(4))
-    sample_size = SampleSize(reader.read(3))
+    _sample_size = SampleSize(reader.read(3))
     assert reader.read(1) == 0b0
     coded_number = decode_coded_number(reader)
 
-    match block_size:
-        case BlockSize.Uncommon8:
-            block_size_ = reader.read(8)
-        case BlockSize.Uncommon16:
-            block_size_ = reader.read(16)
+    # FIXME: find a better way to make mypy happy
+    block_size = 0
+    sample_rate = 0
+    sample_size = 0
 
-    match sample_rate:
-        case SampleRate.Uncommon8:
-            sample_rate_ = reader.read(8)
-        case SampleRate.Uncommon16:
-            sample_rate_ = reader.read(16)
-        case SampleRate.Uncommon16_10:
-            sample_rate_ = reader.read(16) * 10
+    match _block_size:
+        case BlockSize.Uncommon8():
+            block_size = reader.read(8)
+        case BlockSize.Uncommon16():
+            block_size = reader.read(16)
+        case BlockSize.Value(x):
+            block_size = x
+
+    match _sample_rate:
+        case SampleRate.Value():
+            sample_rate = _sample_rate.to_int()
+        case SampleRate.FromStreaminfo:
+            sample_rate = None
+        case SampleRate.Uncommon8():
+            sample_rate = reader.read(8)
+        case SampleRate.Uncommon16():
+            sample_rate = reader.read(16)
+        case SampleRate.Uncommon16_10():
+            sample_rate = reader.read(16) * 10
+
+    match _sample_size:
+        case SampleSize.FromStreaminfo():
+            sample_size = None
+        case SampleSize.Value():
+            sample_size = _sample_size.to_int()
 
     crc = reader.read(8)
 
