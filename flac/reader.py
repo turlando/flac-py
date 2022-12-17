@@ -17,10 +17,10 @@ def mask(n: int):
 
 def extract(x: int, size: int, start: int, stop: int):
     """
-    >>> bin(extract_from_byte(0b10101010, 8, 0, 8))
+    >>> bin(extract(0b10101010, 8, 0, 8))
     '0b10101010'
-    >>> bin(extract_from_byte(0b10101010, 8, 2, 5))
-    '0b1010'
+    >>> bin(extract(0b10101010, 8, 2, 5))
+    '0b101'
     """
     # assert(0 <= start < stop <= x.bit_length())
     return (x >> (size - stop)) & mask(stop - start)
