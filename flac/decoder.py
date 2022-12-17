@@ -208,6 +208,43 @@ class FrameHeader:
     crc: int
 
 
+class SubframeType:
+    def __new__(cls, x: int):
+        assert (0 <= x <= 0b000001 or
+                0b001000 <= x <= 0b001100 or
+                0b100000 <= x <= 0b111111)
+
+        match x:
+            case 0b000000:
+                return cls.Constant()
+            case 0b000001:
+                return cls.Verbatim()
+            case n if 0b001000 <= n <= 0b001100:
+                return cls.Fixed(n & mask(3))
+            case n if n >= 0b100000:
+                return cls.LPC((n & mask(5)) + 1)
+
+    class Constant:
+        pass
+
+    class Verbatim:
+        pass
+
+    @dataclass
+    class Fixed:
+        order: int
+
+    @dataclass
+    class LPC:
+        order: int
+
+
+@dataclass
+class SubframeHeader:
+    type_: SubframeType
+    wasted_bits: int
+
+
 ###############################################################################
 
 def decode(reader: Reader):
@@ -225,6 +262,8 @@ def decode(reader: Reader):
 
     frame_header = decode_frame_header(reader)
     print(frame_header)
+
+    decode_subframe_header(reader)
 
 
 def decode_metadata_block_header(reader: Reader) -> MetadataBlockHeader:
@@ -274,9 +313,9 @@ def decode_frame_header(reader: Reader):
     coded_number = decode_coded_number(reader)
 
     # FIXME: find a better way to make mypy happy
-    block_size = 0
-    sample_rate = 0
-    sample_size = 0
+    block_size: int
+    sample_rate: Optional[int]
+    sample_size: Optional[int]
 
     match _block_size:
         case BlockSize.Uncommon8():
@@ -347,3 +386,24 @@ def decode_coded_number(reader: Reader):
     bs_ = reduce(_decode_coded_number_reduce, bs, 0)
 
     return (b0_ << r * 6) | bs_
+
+
+def decode_subframe_header(reader: Reader):
+    assert reader.read(1) == 0
+
+    type_ = SubframeType(reader.read(6))
+    wasted_bits = decode_wasted_bits(reader)
+
+    return SubframeHeader(type_, wasted_bits)
+
+
+def decode_wasted_bits(reader: Reader):
+    b = reader.read_bool()
+
+    if b is False:
+        return 0
+    else:
+        count = 0
+        while reader.read(1) == 0:
+            count += 1
+        return count
