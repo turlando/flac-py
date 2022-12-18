@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from enum import Enum
 from functools import reduce
-from typing import Optional
+from typing import Optional, Any
 
 from flac.reader import Reader, extract, mask
 
@@ -38,9 +38,43 @@ class Streaminfo:
     max_frame_size: int
     sample_rate: int
     channels: int
-    depth: int
+    depth: int  ## TODO: rename to sample_size?
     samples: int
     md5: bytes
+
+
+def decode_metadata_block_header(reader: Reader) -> MetadataBlockHeader:
+    last = reader.read_bool()
+    block_type = MetadataBlockType(reader.read(7))
+    length = reader.read(24)
+    return MetadataBlockHeader(last, block_type, length)
+
+
+def decode_metadata_block_streaminfo(reader: Reader) -> Streaminfo:
+    min_block = reader.read(16)
+    max_block = reader.read(16)
+    min_frame = reader.read(24)
+    max_frame = reader.read(24)
+    sample_rate = reader.read(20)
+    channels = reader.read(3) + 1
+    depth = reader.read(5) + 1
+    samples = reader.read(36)
+    md5 = reader.read_bytes(16)
+
+    return Streaminfo(
+        min_block, max_block,
+        min_frame, max_frame,
+        sample_rate, channels, depth,
+        samples, md5
+    )
+
+
+def skip_metadata(reader: Reader):
+    while True:
+        header = decode_metadata_block_header(reader)
+        reader._input.read(header.length)
+        if header.last is True:
+            break
 
 
 ###############################################################################
@@ -158,6 +192,32 @@ class Channels(Enum):
     S_R = 0b1001
     M_S = 0b1010
 
+    @property
+    def count(self):
+        match self:
+            case self.M:
+                return 1
+            case self.L_R:
+                return 2
+            case self.L_R_C:
+                return 3
+            case self.FL_FR_BL_BR:
+                return 4
+            case self.FL_FR_FC_BL_BR:
+                return 5
+            case self.FL_FR_FC_LFE_BL_BR:
+                return 6
+            case self.FL_FR_FC_LFE_BC_SL_SR:
+                return 7
+            case self.FL_FR_FC_LFE_BL_BR_SL_SR:
+                return 8
+            case self.L_S:
+                return 2
+            case self.S_R:
+                return 2
+            case self.M_S:
+                return 2
+
 
 class SampleSize:
     def __new__(cls, x: int):
@@ -245,59 +305,48 @@ class SubframeHeader:
     wasted_bits: int
 
 
+class Subframe:
+    @dataclass
+    class Constant:
+        sample: int
+
+    @dataclass
+    class Verbatim:
+        samples: list[int]
+
+    @dataclass
+    class Fixed:
+        warmup: list[int]
+        resitual: list[int]
+
+    @dataclass
+    class LPC:
+        warmup: list[int]
+        precision: int
+        shift: int
+        coefficients: list[int]
+        residual: list[int]
+
+
+@dataclass
+class Frame:
+    header: FrameHeader
+    subframes: Any #: list[Subframe]
+
+
 ###############################################################################
 
-def decode(reader: Reader):
-    assert reader.read(4 * 8) == MAGIC
+def decode_frame(reader: Reader, streaminfo_sample_size: int):
+    header = decode_frame_header(reader)
 
-    streaminfo_header = decode_metadata_block_header(reader)
-    assert streaminfo_header.type == MetadataBlockType.Streaminfo
-    print(streaminfo_header)
+    sample_size = header.sample_size or streaminfo_sample_size
 
-    streaminfo = decode_metadata_block_streaminfo(reader)
-    print(streaminfo)
+    subframes = [
+        decode_subframe(reader, header.block_size, sample_size)
+        for _ in range(header.channels.count)
+    ]
 
-    if streaminfo_header.last is False:
-        skip_metadata(reader)
-
-    frame_header = decode_frame_header(reader)
-    print(frame_header)
-
-    decode_subframe_header(reader)
-
-
-def decode_metadata_block_header(reader: Reader) -> MetadataBlockHeader:
-    last = reader.read_bool()
-    block_type = MetadataBlockType(reader.read(7))
-    length = reader.read(24)
-    return MetadataBlockHeader(last, block_type, length)
-
-
-def decode_metadata_block_streaminfo(reader: Reader) -> Streaminfo:
-    min_block = reader.read(16)
-    max_block = reader.read(16)
-    min_frame = reader.read(24)
-    max_frame = reader.read(24)
-    sample_rate = reader.read(20)
-    channels = reader.read(3) + 1
-    depth = reader.read(5) + 1
-    samples = reader.read(36)
-    md5 = reader.read_bytes(16)
-
-    return Streaminfo(
-        min_block, max_block,
-        min_frame, max_frame,
-        sample_rate, channels, depth,
-        samples, md5
-    )
-
-
-def skip_metadata(reader: Reader):
-    while True:
-        header = decode_metadata_block_header(reader)
-        reader._input.read(header.length)
-        if header.last is True:
-            break
+    return Frame(header, subframes)
 
 
 def decode_frame_header(reader: Reader):
@@ -388,6 +437,47 @@ def decode_coded_number(reader: Reader):
     return (b0_ << r * 6) | bs_
 
 
+def decode_subframe(reader: Reader, block_size: int, sample_size: int):
+    header = decode_subframe_header(reader)
+    sample_size_ = sample_size - header.wasted_bits
+
+    match header.type_:
+        case SubframeType.Constant():
+            samples = reader.read_int(sample_size_)
+            return Subframe.Constant(samples)
+
+        case SubframeType.Verbatim():
+            samples = [reader.read_int(sample_size) for _ in range(block_size)]
+            return Subframe.Verbatim(samples)
+
+        case SubframeType.Fixed(order):
+            warmup_samples = [
+                reader.read_int(sample_size)
+                for _ in range(order)
+            ]
+            residual = decode_residual(reader, sample_size, order)
+            return Subframe.Fixed(warmup_samples, residual)
+
+        case SubframeType.LPC(order):
+            warmup_samples = [
+                reader.read_int(sample_size)
+                for _ in range(order)
+            ]
+
+            precision = reader.read(4)
+            assert 0b0000 <= precision < 0b1111
+            shift = reader.read_int(5)
+            coefficients = [reader.read_int(precision) for _ in range(order)]
+            residual = decode_residual(reader, sample_size, order)
+            return Subframe.LPC(
+                warmup_samples,
+                precision,
+                shift,
+                coefficients,
+                residual
+            )
+
+
 def decode_subframe_header(reader: Reader):
     assert reader.read(1) == 0
 
@@ -407,3 +497,81 @@ def decode_wasted_bits(reader: Reader):
         while reader.read(1) == 0:
             count += 1
         return count
+
+
+def decode_residual(reader: Reader, block_size: int, predictor_order: int):
+    coding_method = reader.read(2)
+    assert 0b00 <= coding_method <= 0b01
+
+    match coding_method:
+        case 0b00:
+            parameter_size = 4
+        case 0b01:
+            parameter_size = 5
+
+    partition_order = reader.read(4)
+
+    partition0 = decode_rice_partition(
+        reader,
+        parameter_size,
+        (block_size >> partition_order) - predictor_order
+    )
+
+    partitions = [
+        decode_rice_partition(
+            reader,
+            parameter_size,
+            block_size >> partition_order
+        )
+        for _ in range((2 ** partition_order) - 1)
+    ]
+
+    return [partition0, *partitions]
+
+
+def decode_rice_partition(
+        reader: Reader,
+        parameter_size: int,
+        samples_count: int
+):
+    assert 4 <= parameter_size <= 5
+    parameter = reader.read(parameter_size)
+
+    if parameter == mask(parameter_size):
+        residual_size = reader.read(5)
+        return [reader.read_int(residual_size) for _ in range(samples_count)]
+    else:
+        return [
+            decode_rice_int(reader, parameter)
+            for _ in range(samples_count)
+        ]
+
+
+def decode_rice_int(reader: Reader, parameter):
+    msb = 0
+    while reader.read(1) == 0:
+        msb += 1
+
+    lsb = reader.read(parameter)
+
+    x = (msb << parameter) | lsb
+    return (x >> 1) ^ -(x & 1)
+
+
+###############################################################################
+
+def decode(reader: Reader):
+    assert reader.read(4 * 8) == MAGIC
+
+    streaminfo_header = decode_metadata_block_header(reader)
+    assert streaminfo_header.type == MetadataBlockType.Streaminfo
+    print(streaminfo_header)
+
+    streaminfo = decode_metadata_block_streaminfo(reader)
+    print(streaminfo)
+
+    if streaminfo_header.last is False:
+        skip_metadata(reader)
+
+    frame = decode_frame(reader, streaminfo.depth)
+    print(frame)
