@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from enum import Enum
 from functools import reduce
-from typing import Optional, Any
+from typing import Optional
 
 from flac.reader import Reader, extract, mask
 
@@ -9,6 +9,10 @@ from flac.reader import Reader, extract, mask
 ###############################################################################
 
 MAGIC = int.from_bytes(b'fLaC', byteorder='big')
+
+
+def consume_magic(reader: Reader):
+    assert reader.read_uint(4 * 8) == MAGIC
 
 
 ###############################################################################
@@ -30,6 +34,16 @@ class MetadataBlockHeader:
     length: int
 
 
+def read_metadata_block_header(reader: Reader) -> MetadataBlockHeader:
+    return MetadataBlockHeader(
+        last=reader.read_bool(),
+        type=MetadataBlockType(reader.read_uint(7)),
+        length=reader.read_uint(24)
+    )
+
+
+###############################################################################
+
 @dataclass(frozen=True)
 class Streaminfo:
     min_block_size: int
@@ -38,40 +52,30 @@ class Streaminfo:
     max_frame_size: int
     sample_rate: int
     channels: int
-    depth: int  ## TODO: rename to sample_size?
+    sample_size: int
     samples: int
     md5: bytes
 
 
-def decode_metadata_block_header(reader: Reader) -> MetadataBlockHeader:
-    last = reader.read_bool()
-    block_type = MetadataBlockType(reader.read_uint(7))
-    length = reader.read_uint(24)
-    return MetadataBlockHeader(last, block_type, length)
-
-
-def decode_metadata_block_streaminfo(reader: Reader) -> Streaminfo:
-    min_block = reader.read_uint(16)
-    max_block = reader.read_uint(16)
-    min_frame = reader.read_uint(24)
-    max_frame = reader.read_uint(24)
-    sample_rate = reader.read_uint(20)
-    channels = reader.read_uint(3) + 1
-    depth = reader.read_uint(5) + 1
-    samples = reader.read_uint(36)
-    md5 = reader.read_bytes(16)
-
+def read_metadata_block_streaminfo(reader: Reader) -> Streaminfo:
     return Streaminfo(
-        min_block, max_block,
-        min_frame, max_frame,
-        sample_rate, channels, depth,
-        samples, md5
+        min_block_size=reader.read_uint(16),
+        max_block_size=reader.read_uint(16),
+        min_frame_size=reader.read_uint(24),
+        max_frame_size=reader.read_uint(24),
+        sample_rate=reader.read_uint(20),
+        channels=reader.read_uint(3) + 1,
+        sample_size=reader.read_uint(5) + 1,
+        samples=reader.read_uint(36),
+        md5=reader.read_bytes(16)
     )
 
 
+###############################################################################
+
 def skip_metadata(reader: Reader):
     while True:
-        header = decode_metadata_block_header(reader)
+        header = read_metadata_block_header(reader)
         reader.read_bytes(header.length)
         if header.last is True:
             break
@@ -84,102 +88,131 @@ class BlockingStrategy(Enum):
     Variable = 1
 
 
-class BlockSize:
-    def __new__(cls, x: int):
-        assert 0b0000 < x < 0b1111
-
-        match x:
-            case 0b0001:
-                return cls.Value(192)
-            case n if 0b0010 <= n <= 0b0101:
-                return cls.Value(144 * (2 ** n))
-            case 0b0110:
-                return cls.Uncommon8()
-            case 0b0111:
-                return cls.Uncommon16()
-            case n if 0b1000 <= n <= 0b1111:
-                return cls.Value(2 ** n)
-
-    @dataclass(frozen=True)
-    class Value:
-        size: int
-
-    class Uncommon8:
-        pass
-
-    class Uncommon16:
-        pass
+def read_blocking_strategy(reader: Reader) -> BlockingStrategy:
+    return BlockingStrategy(reader.read_uint(1))
 
 
-class SampleRate:
-    def __new__(cls, x: int):
-        assert 0b0000 <= x < 0b1111
+###############################################################################
 
-        match x:
-            case 0b0000:
-                return cls.FromStreaminfo()
-            case n if 0b0001 <= n <= 0b1011:
-                return cls.Value(n)
-            case 0b1100:
-                return cls.Uncommon8()
-            case 0b1101:
-                return cls.Uncommon16()
-            case 0b1110:
-                return cls.Uncommon16_10()
+@dataclass(frozen=True)
+class BlockSizeValue:
+    size: int
 
-    class FromStreaminfo:
-        pass
 
-    class Value(Enum):
-        V_88_2_kHz = 0b0001
-        V_176_4_kHz = 0b0010
-        V_192_kHz = 0b0011
-        V_8_kHz = 0b0100
-        V_16_kHz = 0b0101
-        V_22_05_kHz = 0b0110
-        V_24_kHz = 0b0111
-        V_32_kHz = 0b1000
-        V_44_1_kHz = 0b1001
-        V_48_kHz = 0b1010
-        V_96_kHz = 0b1100
+@dataclass(frozen=True)
+class BlockSizeUncommon8:
+    pass
 
-        def to_int(self):
-            match self.value:
-                case self.V_88_2_kHz:
-                    return 88_200
-                case self.V_176_4_kHz:
-                    return 176_400
-                case self.V_192_kHz:
-                    return 192_000
-                case self.V_8_kHz:
-                    return 8_000
-                case self.V_16_kHz:
-                    return 16_000
-                case self.V_22_05_kHz:
-                    return 22_050
-                case self.V_24_kHz:
-                    return 24_000
-                case self.V_32_kHz:
-                    return 32_000
-                case self.V_44_1_kHz:
-                    return 44_100
-                case self.V_48_kHz:
-                    return 48_000
-                case self.V_96_kHz:
-                    return 96_000
 
-    class Uncommon8:
-        pass
+@dataclass(frozen=True)
+class BlockSizeUncommon16:
+    pass
 
-    class Uncommon16:
-        pass
 
-    class Uncommon16_10:
-        pass
+BlockSize = BlockSizeValue | BlockSizeUncommon8 | BlockSizeUncommon16
 
+
+def read_block_size(reader: Reader) -> BlockSize:
+    x = reader.read_uint(4)
+    assert 0b0000 < x < 0b1111
+
+    match x:
+        case 0b0001:
+            return BlockSizeValue(192)
+        case n if 0b0010 <= n <= 0b0101:
+            return BlockSizeValue(144 * (2 ** n))
+        case 0b0110:
+            return BlockSizeUncommon8()
+        case 0b0111:
+            return BlockSizeUncommon16()
+        case n if 0b1000 <= n <= 0b1111:
+            return BlockSizeValue(2 ** n)
+
+    raise ValueError(f"Cannot read block size: {bin(x)}")
+
+
+###############################################################################
+
+class SampleRateFromStreaminfo:
+    pass
+
+
+class SampleRateValue(Enum):
+    V_88_2_kHz = 88_200
+    V_176_4_kHz = 176_400
+    V_192_kHz = 192_000
+    V_8_kHz = 8_000
+    V_16_kHz = 16_000
+    V_22_05_kHz = 22_050
+    V_24_kHz = 24_000
+    V_32_kHz = 32_000
+    V_44_1_kHz = 44_100
+    V_48_kHz = 48_000
+    V_96_kHz = 96_000
+
+    @classmethod
+    def from_bin(cls, x: int):
+        return {
+            0b0001: cls.V_88_2_kHz,
+            0b0010: cls.V_176_4_kHz,
+            0b0011: cls.V_192_kHz,
+            0b0100: cls.V_8_kHz,
+            0b0101: cls.V_16_kHz,
+            0b0110: cls.V_22_05_kHz,
+            0b0111: cls.V_24_kHz,
+            0b1000: cls.V_32_kHz,
+            0b1001: cls.V_44_1_kHz,
+            0b1010: cls.V_48_kHz,
+            0b1100: cls.V_96_kHz
+        }[x]
+
+    def to_int(self):
+        return self.value
+
+
+class SampleRateUncommon8:
+    pass
+
+
+class SampleRateUncommon16:
+    pass
+
+
+class SampleRateUncommon16_10:
+    pass
+
+
+SampleRate = (
+    SampleRateFromStreaminfo
+    | SampleRateValue
+    | SampleRateUncommon8
+    | SampleRateUncommon16
+    | SampleRateUncommon16_10
+)
+
+
+def read_sample_rate(reader: Reader) -> SampleRate:
+    x = reader.read_uint(4)
+    assert 0b0000 <= x < 0b1111
+
+    match x:
+        case 0b0000:
+            return SampleRateFromStreaminfo()
+        case n if 0b0001 <= n <= 0b1011:
+            return SampleRateValue.from_bin(n)
+        case 0b1100:
+            return SampleRateUncommon8()
+        case 0b1101:
+            return SampleRateUncommon16()
+        case 0b1110:
+            return SampleRateUncommon16_10()
+
+    raise ValueError(f"Cannot read sample rate: {bin(x)}")
+
+
+###############################################################################
 
 class Channels(Enum):
-    # assert 0b0000 <= x <= 1010
     M = 0b0000
     L_R = 0b0001
     L_R_C = 0b0010
@@ -193,34 +226,24 @@ class Channels(Enum):
     M_S = 0b1010
 
     @property
-    def count(self):
-        match self:
-            case self.M:
-                return 1
-            case self.L_R:
-                return 2
-            case self.L_R_C:
-                return 3
-            case self.FL_FR_BL_BR:
-                return 4
-            case self.FL_FR_FC_BL_BR:
-                return 5
-            case self.FL_FR_FC_LFE_BL_BR:
-                return 6
-            case self.FL_FR_FC_LFE_BC_SL_SR:
-                return 7
-            case self.FL_FR_FC_LFE_BL_BR_SL_SR:
-                return 8
-            case self.L_S:
-                return 2
-            case self.S_R:
-                return 2
-            case self.M_S:
-                return 2
+    def count(self) -> int:
+        return {
+            Channels.M: 1,
+            Channels.L_R: 2,
+            Channels.L_R_C: 3,
+            Channels.FL_FR_BL_BR: 4,
+            Channels.FL_FR_FC_BL_BR: 5,
+            Channels.FL_FR_FC_LFE_BL_BR: 6,
+            Channels.FL_FR_FC_LFE_BC_SL_SR: 7,
+            Channels.FL_FR_FC_LFE_BL_BR_SL_SR: 8,
+            Channels.L_S: 2,
+            Channels.S_R: 2,
+            Channels.M_S: 2
+        }[self]
 
     @property
     def decorrelation_bit(self):
-        # Side channel has one extra bit in sample_size / depth
+        # Side channel has one extra bit in sample_size
         match self:
             case self.L_S:
                 return (0, 1)
@@ -232,45 +255,62 @@ class Channels(Enum):
                 return (0,) * self.count
 
 
-class SampleSize:
-    def __new__(cls, x: int):
-        assert 0b000 <= x <= 0b111
-        assert x != 0b011
-
-        match x:
-            case 0b000:
-                return cls.FromStreaminfo()
-            case n if 0b001 <= n <= 0b111:
-                return cls.Value(n)
-
-    class FromStreaminfo:
-        pass
-
-    class Value(Enum):
-        V_8 = 0b001
-        V_12 = 0b010
-        V_16 = 0b100
-        V_20 = 0b101
-        V_24 = 0b110
-        V_32 = 0b111
-
-        def to_int(self):
-            match self.value:
-                case self.V_8:
-                    return 8
-                case self.V_12:
-                    return 12
-                case self.V_16:
-                    return 16
-                case self.V_20:
-                    return 20
-                case self.V_24:
-                    return 24
-                case self.V_32:
-                    return 32
+def read_channels(reader: Reader) -> Channels:
+    x = reader.read_uint(4)
+    assert 0b0000 <= x <= 0b1010
+    return Channels(x)
 
 
-@dataclass
+###############################################################################
+
+@dataclass(frozen=True)
+class SampleSizeFromStreaminfo:
+    pass
+
+
+class SampleSizeValue(Enum):
+    V_8 = 8
+    V_12 = 12
+    V_16 = 16
+    V_20 = 20
+    V_24 = 24
+    V_32 = 32
+
+    @classmethod
+    def from_bin(cls, x: int):
+        return {
+            0b001: cls.V_8,
+            0b010: cls.V_12,
+            0b100: cls.V_16,
+            0b101: cls.V_20,
+            0b110: cls.V_24,
+            0b111: cls.V_32
+        }[x]
+
+    def to_int(self):
+        return self.value
+
+
+SampleSize = SampleSizeFromStreaminfo | SampleSizeValue
+
+
+def read_sample_size(reader: Reader) -> SampleSize:
+    x = reader.read_uint(3)
+    assert 0b000 <= x <= 0b111
+    assert x != 0b011
+
+    match x:
+        case 0b000:
+            return SampleSizeFromStreaminfo()
+        case n if 0b001 <= n <= 0b111:
+            return SampleSizeValue.from_bin(n)
+
+    raise ValueError(f"Cannot read sample size: {bin(x)}")
+
+
+###############################################################################
+
+@dataclass(frozen=True)
 class FrameHeader:
     blocking_strategy: BlockingStrategy
     block_size: int
@@ -281,109 +321,17 @@ class FrameHeader:
     crc: int
 
 
-class SubframeType:
-    def __new__(cls, x: int):
-        assert (0 <= x <= 0b000001 or
-                0b001000 <= x <= 0b001100 or
-                0b100000 <= x <= 0b111111)
-
-        match x:
-            case 0b000000:
-                return cls.Constant()
-            case 0b000001:
-                return cls.Verbatim()
-            case n if 0b001000 <= n <= 0b001100:
-                return cls.Fixed(n & mask(3))
-            case n if n >= 0b100000:
-                return cls.LPC((n & mask(5)) + 1)
-
-    class Constant:
-        pass
-
-    class Verbatim:
-        pass
-
-    @dataclass
-    class Fixed:
-        order: int
-
-    @dataclass
-    class LPC:
-        order: int
-
-
-@dataclass
-class SubframeHeader:
-    type_: SubframeType
-    wasted_bits: int
-
-
-class Subframe:
-    @dataclass
-    class Constant:
-        sample: int
-
-    @dataclass
-    class Verbatim:
-        samples: list[int]
-
-    @dataclass
-    class Fixed:
-        warmup: list[int]
-        resitual: list[int]
-
-    @dataclass
-    class LPC:
-        warmup: list[int]
-        precision: int
-        shift: int
-        coefficients: list[int]
-        residual: list[int]
-
-
-@dataclass
-class Frame:
-    header: FrameHeader
-    subframes: Any #: list[Subframe]
-    crc: int
-
-
-###############################################################################
-
-def decode_frame(reader: Reader, streaminfo_sample_size: int):
-    header = decode_frame_header(reader)
-    print(header)
-    sample_size = (header.sample_size or streaminfo_sample_size)
-
-    subframes = [
-        decode_subframe(
-            reader,
-            header.block_size,
-            sample_size + header.channels.decorrelation_bit[i]
-        )
-        for i in range(header.channels.count)
-    ]
-
-    if reader.is_byte_aligned is False:
-        padding = reader.read_uint(reader.bits_until_byte_alignment)
-        assert padding == 0
-
-    crc = reader.read_uint(16)
-
-    return Frame(header, subframes, crc)
-
-
-def decode_frame_header(reader: Reader):
+def read_frame_header(reader: Reader) -> FrameHeader:
     assert reader.read_uint(14) == 0b11111111111110
     assert reader.read_uint(1) == 0
 
     blocking_strategy = BlockingStrategy(reader.read_uint(1))
-    _block_size = BlockSize(reader.read_uint(4))
-    _sample_rate = SampleRate(reader.read_uint(4))
-    channels = Channels(reader.read_uint(4))
-    _sample_size = SampleSize(reader.read_uint(3))
+    _block_size = read_block_size(reader)
+    _sample_rate = read_sample_rate(reader)
+    channels = read_channels(reader)
+    _sample_size = read_sample_size(reader)
     assert reader.read_uint(1) == 0
-    coded_number = decode_coded_number(reader)
+    coded_number = read_coded_number(reader)
 
     # FIXME: find a better way to make mypy happy
     block_size: int
@@ -391,29 +339,29 @@ def decode_frame_header(reader: Reader):
     sample_size: Optional[int]
 
     match _block_size:
-        case BlockSize.Uncommon8():
+        case BlockSizeUncommon8():
             block_size = reader.read_uint(8)
-        case BlockSize.Uncommon16():
+        case BlockSizeUncommon16():
             block_size = reader.read_uint(16)
-        case BlockSize.Value(x):
+        case BlockSizeValue(x):
             block_size = x
 
     match _sample_rate:
-        case SampleRate.Value():
+        case SampleRateValue():
             sample_rate = _sample_rate.to_int()
-        case SampleRate.FromStreaminfo:
+        case SampleRateFromStreaminfo():
             sample_rate = None
-        case SampleRate.Uncommon8():
+        case SampleRateUncommon8():
             sample_rate = reader.read_uint(8)
-        case SampleRate.Uncommon16():
+        case SampleRateUncommon16():
             sample_rate = reader.read_uint(16)
-        case SampleRate.Uncommon16_10():
+        case SampleRateUncommon16_10():
             sample_rate = reader.read_uint(16) * 10
 
     match _sample_size:
-        case SampleSize.FromStreaminfo():
+        case SampleSizeFromStreaminfo():
             sample_size = None
-        case SampleSize.Value():
+        case SampleSizeValue():
             sample_size = _sample_size.to_int()
 
     crc = reader.read_uint(8)
@@ -429,11 +377,22 @@ def decode_frame_header(reader: Reader):
     )
 
 
-def _decode_coded_number_reduce(acc: int, x: int):
+def read_coded_number(reader: Reader):
+    b0 = reader.read_uint(8)
+    r = _read_coded_number_remaining(b0)
+    bs = reader.read_bytes(r)
+
+    b0_ = extract(b0, 8, r + 2, 8)
+    bs_ = reduce(_read_coded_number_reduce, bs, 0)
+
+    return (b0_ << r * 6) | bs_
+
+
+def _read_coded_number_reduce(acc: int, x: int):
     return (acc << 6) | mask(6)
 
 
-def _decode_coded_number_remaining(b0: int):
+def _read_coded_number_remaining(b0: int):
     if b0 >= 0b11111110:
         return 6
     if b0 >= 0b11111100:
@@ -450,72 +409,73 @@ def _decode_coded_number_remaining(b0: int):
         return 0
 
 
-def decode_coded_number(reader: Reader):
-    b0 = reader.read_uint(8)
-    r = _decode_coded_number_remaining(b0)
-    bs = reader.read_bytes(r)
+###############################################################################
 
-    b0_ = extract(b0, 8, r + 2, 8)
-    bs_ = reduce(_decode_coded_number_reduce, bs, 0)
-
-    return (b0_ << r * 6) | bs_
+@dataclass(frozen=True)
+class SubframeTypeConstant:
+    pass
 
 
-def decode_subframe(reader: Reader, block_size: int, sample_size: int):
-    header = decode_subframe_header(reader)
-    print("  ", header)
-    sample_size_ = sample_size - header.wasted_bits
-
-    match header.type_:
-        case SubframeType.Constant():
-            samples = reader.read_int(sample_size_)
-            return Subframe.Constant(samples)
-
-        case SubframeType.Verbatim():
-            samples = [reader.read_int(sample_size_) for _ in range(block_size)]
-            return Subframe.Verbatim(samples)
-
-        case SubframeType.Fixed(order):
-            warmup_samples = [
-                reader.read_int(sample_size_)
-                for _ in range(order)
-            ]
-            residual = decode_residual(reader, block_size, order)
-            return Subframe.Fixed(warmup_samples, residual)
-
-        case SubframeType.LPC(order):
-            warmup_samples = [
-                reader.read_int(sample_size_)
-                for _ in range(order)
-            ]
-
-            precision = reader.read_uint(4)
-            assert 0b0000 <= precision < 0b1111
-            precision_ = precision + 1
-
-            shift = reader.read_int(5)
-            coefficients = [reader.read_int(precision_) for _ in range(order)]
-            residual = decode_residual(reader, block_size, order)
-
-            return Subframe.LPC(
-                warmup_samples,
-                precision_,
-                shift,
-                coefficients,
-                residual
-            )
+@dataclass(frozen=True)
+class SubframeTypeVerbatim:
+    pass
 
 
-def decode_subframe_header(reader: Reader):
+@dataclass(frozen=True)
+class SubframeTypeFixed:
+    order: int
+
+
+@dataclass(frozen=True)
+class SubframeTypeLPC:
+    order: int
+
+
+SubframeType = (
+    SubframeTypeConstant
+    | SubframeTypeVerbatim
+    | SubframeTypeFixed
+    | SubframeTypeLPC
+)
+
+
+def read_subframe_type(reader: Reader) -> SubframeType:
+    x = reader.read_uint(6)
+    assert (0 <= x <= 0b000001 or
+            0b001000 <= x <= 0b001100 or
+            0b100000 <= x <= 0b111111)
+
+    match x:
+        case 0b000000:
+            return SubframeTypeConstant()
+        case 0b000001:
+            return SubframeTypeVerbatim()
+        case n if 0b001000 <= n <= 0b001100:
+            return SubframeTypeFixed(n & mask(3))
+        case n if n >= 0b100000:
+            return SubframeTypeLPC((n & mask(5)) + 1)
+
+    raise ValueError(f"Cannot read subframe type: {bin(x)}")
+
+
+###############################################################################
+
+@dataclass(frozen=True)
+class SubframeHeader:
+    type_: SubframeType
+    wasted_bits: int
+
+
+def read_subframe_header(reader: Reader) -> SubframeHeader:
     assert reader.read_uint(1) == 0
 
-    type_ = SubframeType(reader.read_uint(6))
-    wasted_bits = decode_wasted_bits(reader)
+    type_ = read_subframe_type(reader)
+    wasted_bits = read_wasted_bits(reader)
 
     return SubframeHeader(type_, wasted_bits)
 
 
-def decode_wasted_bits(reader: Reader):
+def read_wasted_bits(reader: Reader):
     b = reader.read_uint(1)
 
     if b == 0:
@@ -527,7 +487,88 @@ def decode_wasted_bits(reader: Reader):
         return count
 
 
-def decode_residual(reader: Reader, block_size: int, predictor_order: int):
+###############################################################################
+
+@dataclass(frozen=True)
+class SubframeConstant:
+    sample: int
+
+
+@dataclass(frozen=True)
+class SubframeVerbatim:
+    samples: list[int]
+
+
+@dataclass(frozen=True)
+class SubframeFixed:
+    warmup: list[int]
+    resitual: list[int]
+
+
+@dataclass(frozen=True)
+class SubframeLPC:
+    warmup: list[int]
+    precision: int
+    shift: int
+    coefficients: list[int]
+    residual: list[int]
+
+
+Subframe = SubframeConstant | SubframeVerbatim | SubframeFixed | SubframeLPC
+
+
+def read_subframe(
+        reader: Reader,
+        block_size: int,
+        sample_size: int
+) -> Subframe:
+    header = read_subframe_header(reader)
+    sample_size_ = sample_size - header.wasted_bits
+
+    match header.type_:
+        case SubframeTypeConstant():
+            samples = reader.read_int(sample_size_)
+            return SubframeConstant(samples)
+
+        case SubframeTypeVerbatim():
+            samples = [
+                reader.read_int(sample_size_)
+                for _ in range(block_size)
+            ]
+            return SubframeVerbatim(samples)
+
+        case SubframeTypeFixed(order):
+            warmup_samples = [
+                reader.read_int(sample_size_)
+                for _ in range(order)
+            ]
+            residual = read_residual(reader, block_size, order)
+            return SubframeFixed(warmup_samples, residual)
+
+        case SubframeTypeLPC(order):
+            warmup_samples = [
+                reader.read_int(sample_size_)
+                for _ in range(order)
+            ]
+
+            precision = reader.read_uint(4)
+            assert 0b0000 <= precision < 0b1111
+            precision_ = precision + 1
+
+            shift = reader.read_int(5)
+            coefficients = [reader.read_int(precision_) for _ in range(order)]
+            residual = read_residual(reader, block_size, order)
+
+            return SubframeLPC(
+                warmup_samples,
+                precision_,
+                shift,
+                coefficients,
+                residual
+            )
+
+
+def read_residual(reader: Reader, block_size: int, predictor_order: int):
     coding_method = reader.read_uint(2)
     assert 0b00 <= coding_method <= 0b01
 
@@ -543,14 +584,14 @@ def decode_residual(reader: Reader, block_size: int, predictor_order: int):
     assert block_size % partitions_count == 0
     assert (block_size >> partition_order) > predictor_order
 
-    partition0 = decode_rice_partition(
+    partition0 = read_rice_partition(
         reader,
         parameter_size,
         (block_size >> partition_order) - predictor_order
     )
 
     partitions = [
-        decode_rice_partition(
+        read_rice_partition(
             reader,
             parameter_size,
             block_size >> partition_order
@@ -561,7 +602,7 @@ def decode_residual(reader: Reader, block_size: int, predictor_order: int):
     return [partition0, *partitions]
 
 
-def decode_rice_partition(
+def read_rice_partition(
         reader: Reader,
         parameter_size: int,
         samples_count: int
@@ -574,12 +615,12 @@ def decode_rice_partition(
         return [reader.read_int(residual_size) for _ in range(samples_count)]
     else:
         return [
-            decode_rice_int(reader, parameter)
+            read_rice_int(reader, parameter)
             for _ in range(samples_count)
         ]
 
 
-def decode_rice_int(reader: Reader, parameter):
+def read_rice_int(reader: Reader, parameter):
     msb = 0
     while reader.read_uint(1) == 0:
         msb += 1
@@ -592,18 +633,49 @@ def decode_rice_int(reader: Reader, parameter):
 
 ###############################################################################
 
+@dataclass(frozen=True)
+class Frame:
+    header: FrameHeader
+    subframes: list[Subframe]
+    crc: int
+
+
+def read_frame(reader: Reader, streaminfo_sample_size: int) -> Frame:
+    header = read_frame_header(reader)
+    sample_size = (header.sample_size or streaminfo_sample_size)
+
+    subframes = [
+        read_subframe(
+            reader,
+            header.block_size,
+            sample_size + header.channels.decorrelation_bit[i]
+        )
+        for i in range(header.channels.count)
+    ]
+
+    if reader.is_byte_aligned is False:
+        padding = reader.read_uint(reader.bits_until_byte_alignment)
+        assert padding == 0
+
+    crc = reader.read_uint(16)
+
+    return Frame(header, subframes, crc)
+
+
+###############################################################################
+
 def decode(reader: Reader):
-    assert reader.read_uint(4 * 8) == MAGIC
+    consume_magic(reader)
 
-    streaminfo_header = decode_metadata_block_header(reader)
+    streaminfo_header = read_metadata_block_header(reader)
     assert streaminfo_header.type == MetadataBlockType.Streaminfo
-    print(streaminfo_header)
 
-    streaminfo = decode_metadata_block_streaminfo(reader)
+    streaminfo = read_metadata_block_streaminfo(reader)
     print(streaminfo)
 
     if streaminfo_header.last is False:
         skip_metadata(reader)
 
     while True:
-        frame = decode_frame(reader, streaminfo.depth)
+        frame = read_frame(reader, streaminfo.sample_size)
+        print(frame.header)
