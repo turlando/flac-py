@@ -45,20 +45,20 @@ class Streaminfo:
 
 def decode_metadata_block_header(reader: Reader) -> MetadataBlockHeader:
     last = reader.read_bool()
-    block_type = MetadataBlockType(reader.read(7))
-    length = reader.read(24)
+    block_type = MetadataBlockType(reader.read_uint(7))
+    length = reader.read_uint(24)
     return MetadataBlockHeader(last, block_type, length)
 
 
 def decode_metadata_block_streaminfo(reader: Reader) -> Streaminfo:
-    min_block = reader.read(16)
-    max_block = reader.read(16)
-    min_frame = reader.read(24)
-    max_frame = reader.read(24)
-    sample_rate = reader.read(20)
-    channels = reader.read(3) + 1
-    depth = reader.read(5) + 1
-    samples = reader.read(36)
+    min_block = reader.read_uint(16)
+    max_block = reader.read_uint(16)
+    min_frame = reader.read_uint(24)
+    max_frame = reader.read_uint(24)
+    sample_rate = reader.read_uint(20)
+    channels = reader.read_uint(3) + 1
+    depth = reader.read_uint(5) + 1
+    samples = reader.read_uint(36)
     md5 = reader.read_bytes(16)
 
     return Streaminfo(
@@ -72,7 +72,7 @@ def decode_metadata_block_streaminfo(reader: Reader) -> Streaminfo:
 def skip_metadata(reader: Reader):
     while True:
         header = decode_metadata_block_header(reader)
-        reader._input.read(header.length)
+        reader.read_bytes(header.length)
         if header.last is True:
             break
 
@@ -338,7 +338,6 @@ class Frame:
 
 def decode_frame(reader: Reader, streaminfo_sample_size: int):
     header = decode_frame_header(reader)
-
     sample_size = header.sample_size or streaminfo_sample_size
 
     subframes = [
@@ -346,19 +345,21 @@ def decode_frame(reader: Reader, streaminfo_sample_size: int):
         for _ in range(header.channels.count)
     ]
 
+    # decode frame footer
+
     return Frame(header, subframes)
 
 
 def decode_frame_header(reader: Reader):
-    assert reader.read(14) == 0b11111111111110
-    assert reader.read(1) == 0b0
+    assert reader.read_uint(14) == 0b11111111111110
+    assert reader.read_uint(1) == 0
 
-    blocking_strategy = BlockingStrategy(reader.read(1))
-    _block_size = BlockSize(reader.read(4))
-    _sample_rate = SampleRate(reader.read(4))
-    channels = Channels(reader.read(4))
-    _sample_size = SampleSize(reader.read(3))
-    assert reader.read(1) == 0b0
+    blocking_strategy = BlockingStrategy(reader.read_uint(1))
+    _block_size = BlockSize(reader.read_uint(4))
+    _sample_rate = SampleRate(reader.read_uint(4))
+    channels = Channels(reader.read_uint(4))
+    _sample_size = SampleSize(reader.read_uint(3))
+    assert reader.read_uint(1) == 0
     coded_number = decode_coded_number(reader)
 
     # FIXME: find a better way to make mypy happy
@@ -368,9 +369,9 @@ def decode_frame_header(reader: Reader):
 
     match _block_size:
         case BlockSize.Uncommon8():
-            block_size = reader.read(8)
+            block_size = reader.read_uint(8)
         case BlockSize.Uncommon16():
-            block_size = reader.read(16)
+            block_size = reader.read_uint(16)
         case BlockSize.Value(x):
             block_size = x
 
@@ -380,11 +381,11 @@ def decode_frame_header(reader: Reader):
         case SampleRate.FromStreaminfo:
             sample_rate = None
         case SampleRate.Uncommon8():
-            sample_rate = reader.read(8)
+            sample_rate = reader.read_uint(8)
         case SampleRate.Uncommon16():
-            sample_rate = reader.read(16)
+            sample_rate = reader.read_uint(16)
         case SampleRate.Uncommon16_10():
-            sample_rate = reader.read(16) * 10
+            sample_rate = reader.read_uint(16) * 10
 
     match _sample_size:
         case SampleSize.FromStreaminfo():
@@ -392,7 +393,7 @@ def decode_frame_header(reader: Reader):
         case SampleSize.Value():
             sample_size = _sample_size.to_int()
 
-    crc = reader.read(8)
+    crc = reader.read_uint(8)
 
     return FrameHeader(
         blocking_strategy,
@@ -427,7 +428,7 @@ def _decode_coded_number_remaining(b0: int):
 
 
 def decode_coded_number(reader: Reader):
-    b0 = reader.read(8)
+    b0 = reader.read_uint(8)
     r = _decode_coded_number_remaining(b0)
     bs = reader.read_bytes(r)
 
@@ -464,14 +465,17 @@ def decode_subframe(reader: Reader, block_size: int, sample_size: int):
                 for _ in range(order)
             ]
 
-            precision = reader.read(4)
+            precision = reader.read_uint(4)
             assert 0b0000 <= precision < 0b1111
+            precision_ = precision + 1
+
             shift = reader.read_int(5)
-            coefficients = [reader.read_int(precision) for _ in range(order)]
-            residual = decode_residual(reader, sample_size, order)
+            coefficients = [reader.read_int(precision_) for _ in range(order)]
+            residual = decode_residual(reader, block_size, order)
+
             return Subframe.LPC(
                 warmup_samples,
-                precision,
+                precision_,
                 shift,
                 coefficients,
                 residual
@@ -479,28 +483,28 @@ def decode_subframe(reader: Reader, block_size: int, sample_size: int):
 
 
 def decode_subframe_header(reader: Reader):
-    assert reader.read(1) == 0
+    assert reader.read_uint(1) == 0
 
-    type_ = SubframeType(reader.read(6))
+    type_ = SubframeType(reader.read_uint(6))
     wasted_bits = decode_wasted_bits(reader)
 
     return SubframeHeader(type_, wasted_bits)
 
 
 def decode_wasted_bits(reader: Reader):
-    b = reader.read_bool()
+    b = reader.read_uint(1)
 
-    if b is False:
+    if b == 0:
         return 0
     else:
         count = 0
-        while reader.read(1) == 0:
+        while reader.read_uint(1) == 0:
             count += 1
         return count
 
 
 def decode_residual(reader: Reader, block_size: int, predictor_order: int):
-    coding_method = reader.read(2)
+    coding_method = reader.read_uint(2)
     assert 0b00 <= coding_method <= 0b01
 
     match coding_method:
@@ -509,7 +513,7 @@ def decode_residual(reader: Reader, block_size: int, predictor_order: int):
         case 0b01:
             parameter_size = 5
 
-    partition_order = reader.read(4)
+    partition_order = reader.read_uint(4)
 
     partition0 = decode_rice_partition(
         reader,
@@ -535,10 +539,10 @@ def decode_rice_partition(
         samples_count: int
 ):
     assert 4 <= parameter_size <= 5
-    parameter = reader.read(parameter_size)
+    parameter = reader.read_uint(parameter_size)
 
     if parameter == mask(parameter_size):
-        residual_size = reader.read(5)
+        residual_size = reader.read_uint(5)
         return [reader.read_int(residual_size) for _ in range(samples_count)]
     else:
         return [
@@ -549,10 +553,10 @@ def decode_rice_partition(
 
 def decode_rice_int(reader: Reader, parameter):
     msb = 0
-    while reader.read(1) == 0:
+    while reader.read_uint(1) == 0:
         msb += 1
 
-    lsb = reader.read(parameter)
+    lsb = reader.read_uint(parameter)
 
     x = (msb << parameter) | lsb
     return (x >> 1) ^ -(x & 1)
@@ -561,7 +565,7 @@ def decode_rice_int(reader: Reader, parameter):
 ###############################################################################
 
 def decode(reader: Reader):
-    assert reader.read(4 * 8) == MAGIC
+    assert reader.read_uint(4 * 8) == MAGIC
 
     streaminfo_header = decode_metadata_block_header(reader)
     assert streaminfo_header.type == MetadataBlockType.Streaminfo
