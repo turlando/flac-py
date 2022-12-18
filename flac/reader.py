@@ -76,12 +76,16 @@ class Reader:
                 n -= 8
             return res | self.read(n)
 
-    def read_bytes(self, n: int):
-        assert self._bit_offset == 0
-        return self._input.read(n)
+    def read_int(self, n: int):
+        x = self.read(n)
+        return x - ((x >> (n - 1)) << n)
 
     def read_bool(self) -> bool:
         if self.read(1) == 1:
             return True
         else:
             return False
+
+    def read_bytes(self, n: int):
+        assert self._bit_offset == 0
+        return self._input.read(n)
