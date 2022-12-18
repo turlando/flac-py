@@ -219,12 +219,17 @@ class Channels(Enum):
                 return 2
 
     @property
-    def decorrelation(self):
+    def decorrelation_bit(self):
+        # Side channel has one extra bit in sample_size / depth
         match self:
-            case self.L_S | self.S_R | self.M_S:
-                return True
+            case self.L_S:
+                return (0, 1)
+            case self.S_R:
+                return (1, 0)
+            case self.M_S:
+                return (0, 1)
             case _:
-                return False
+                return (0,) * self.count
 
 
 class SampleSize:
@@ -347,12 +352,16 @@ class Frame:
 
 def decode_frame(reader: Reader, streaminfo_sample_size: int):
     header = decode_frame_header(reader)
-    sample_size = ((header.sample_size or streaminfo_sample_size)
-                   + (1 if header.channels.decorrelation is True else 0))
+    print(header)
+    sample_size = (header.sample_size or streaminfo_sample_size)
 
     subframes = [
-        decode_subframe(reader, header.block_size, sample_size)
-        for _ in range(header.channels.count)
+        decode_subframe(
+            reader,
+            header.block_size,
+            sample_size + header.channels.decorrelation_bit[i]
+        )
+        for i in range(header.channels.count)
     ]
 
     if reader.is_byte_aligned is False:
@@ -454,6 +463,7 @@ def decode_coded_number(reader: Reader):
 
 def decode_subframe(reader: Reader, block_size: int, sample_size: int):
     header = decode_subframe_header(reader)
+    print("  ", header)
     sample_size_ = sample_size - header.wasted_bits
 
     match header.type_:
@@ -597,4 +607,3 @@ def decode(reader: Reader):
 
     while True:
         frame = decode_frame(reader, streaminfo.depth)
-        print(frame)
