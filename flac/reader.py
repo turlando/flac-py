@@ -40,7 +40,7 @@ class Reader:
     def _update_bit_offset(self, n: int):
         self._bit_offset = (self._bit_offset + n) % 8
 
-    def read(self, n: int):
+    def read_uint(self, n: int):
         if n == 0:
             return 0
 
@@ -72,16 +72,16 @@ class Reader:
             # return (self.read(8) << (n - 8)) | self.read(n - 8)
             res = 0
             while n > 8:
-                res |= self.read(8) << (n - 8)
+                res |= self.read_uint(8) << (n - 8)
                 n -= 8
-            return res | self.read(n)
+            return res | self.read_uint(n)
 
     def read_int(self, n: int):
-        x = self.read(n)
+        x = self.read_uint(n)
         return x - ((x >> (n - 1)) << n)
 
     def read_bool(self) -> bool:
-        if self.read(1) == 1:
+        if self.read_uint(1) == 1:
             return True
         else:
             return False
