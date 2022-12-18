@@ -218,6 +218,14 @@ class Channels(Enum):
             case self.M_S:
                 return 2
 
+    @property
+    def decorrelation(self):
+        match self:
+            case self.L_S | self.S_R | self.M_S:
+                return True
+            case _:
+                return False
+
 
 class SampleSize:
     def __new__(cls, x: int):
@@ -332,22 +340,28 @@ class Subframe:
 class Frame:
     header: FrameHeader
     subframes: Any #: list[Subframe]
+    crc: int
 
 
 ###############################################################################
 
 def decode_frame(reader: Reader, streaminfo_sample_size: int):
     header = decode_frame_header(reader)
-    sample_size = header.sample_size or streaminfo_sample_size
+    sample_size = ((header.sample_size or streaminfo_sample_size)
+                   + (1 if header.channels.decorrelation is True else 0))
 
     subframes = [
         decode_subframe(reader, header.block_size, sample_size)
         for _ in range(header.channels.count)
     ]
 
-    # decode frame footer
+    if reader.is_byte_aligned is False:
+        padding = reader.read_uint(reader.bits_until_byte_alignment)
+        assert padding == 0
 
-    return Frame(header, subframes)
+    crc = reader.read_uint(16)
+
+    return Frame(header, subframes, crc)
 
 
 def decode_frame_header(reader: Reader):
@@ -448,20 +462,20 @@ def decode_subframe(reader: Reader, block_size: int, sample_size: int):
             return Subframe.Constant(samples)
 
         case SubframeType.Verbatim():
-            samples = [reader.read_int(sample_size) for _ in range(block_size)]
+            samples = [reader.read_int(sample_size_) for _ in range(block_size)]
             return Subframe.Verbatim(samples)
 
         case SubframeType.Fixed(order):
             warmup_samples = [
-                reader.read_int(sample_size)
+                reader.read_int(sample_size_)
                 for _ in range(order)
             ]
-            residual = decode_residual(reader, sample_size, order)
+            residual = decode_residual(reader, block_size, order)
             return Subframe.Fixed(warmup_samples, residual)
 
         case SubframeType.LPC(order):
             warmup_samples = [
-                reader.read_int(sample_size)
+                reader.read_int(sample_size_)
                 for _ in range(order)
             ]
 
@@ -514,6 +528,10 @@ def decode_residual(reader: Reader, block_size: int, predictor_order: int):
             parameter_size = 5
 
     partition_order = reader.read_uint(4)
+    partitions_count = 2 ** partition_order
+
+    assert block_size % partitions_count == 0
+    assert (block_size >> partition_order) > predictor_order
 
     partition0 = decode_rice_partition(
         reader,
@@ -527,7 +545,7 @@ def decode_residual(reader: Reader, block_size: int, predictor_order: int):
             parameter_size,
             block_size >> partition_order
         )
-        for _ in range((2 ** partition_order) - 1)
+        for _ in range(partitions_count - 1)
     ]
 
     return [partition0, *partitions]
@@ -577,5 +595,6 @@ def decode(reader: Reader):
     if streaminfo_header.last is False:
         skip_metadata(reader)
 
-    frame = decode_frame(reader, streaminfo.depth)
-    print(frame)
+    while True:
+        frame = decode_frame(reader, streaminfo.depth)
+        print(frame)

@@ -32,6 +32,14 @@ class Reader:
         self._bit_offset = 0
         self._current_byte = 0
 
+    @property
+    def is_byte_aligned(self):
+        return self._bit_offset == 0
+
+    @property
+    def bits_until_byte_alignment(self):
+        return 8 - self._bit_offset
+
     def _maybe_read_byte(self):
         if self._bit_offset == 0:
             self._current_byte = self._input.read(1)[0]
