@@ -493,16 +493,25 @@ def read_wasted_bits(reader: Reader):
 class SubframeConstant:
     sample: int
 
+    def __repr__(self):
+        return "SubframeConstant()"
+
 
 @dataclass(frozen=True)
 class SubframeVerbatim:
     samples: list[int]
 
+    def __repr__(self):
+        return "SubframeVerbatim()"
+
 
 @dataclass(frozen=True)
 class SubframeFixed:
     warmup: list[int]
-    resitual: list[int]
+    residual: list[int]
+
+    def __repr__(self):
+        return f"SubframeFixed(order={len(self.warmup)})"
 
 
 @dataclass(frozen=True)
@@ -512,6 +521,9 @@ class SubframeLPC:
     shift: int
     coefficients: list[int]
     residual: list[int]
+
+    def __repr__(self):
+        return f"SubframeLPC(order={len(self.warmup)})"
 
 
 Subframe = SubframeConstant | SubframeVerbatim | SubframeFixed | SubframeLPC
@@ -673,9 +685,16 @@ def decode(reader: Reader):
     streaminfo = read_metadata_block_streaminfo(reader)
     print(streaminfo)
 
+    print()
+
     if streaminfo_header.last is False:
         skip_metadata(reader)
 
     while True:
         frame = read_frame(reader, streaminfo.sample_size)
         print(frame.header)
+
+        for subframe in frame.subframes:
+            print(' ' * 4, subframe)
+
+        print()
