@@ -74,15 +74,16 @@ class Reader:
             return extract(w, 16, offset, offset + n)
 
         # If the required bits are more than 8.
-        else:
-            # Recursive implementation that is in my opinion clearer but
-            # not efficient in Python.
-            # return (self.read(8) << (n - 8)) | self.read(n - 8)
-            res = 0
-            while n > 8:
-                res |= self.read_uint(8) << (n - 8)
-                n -= 8
-            return res | self.read_uint(n)
+        #
+        # Recursive implementation that is in my opinion clearer but
+        # not efficient in Python.
+        #
+        # > return (self.read(8) << (n - 8)) | self.read(n - 8)
+        res = 0
+        while n > 8:
+            res |= self.read_uint(8) << (n - 8)
+            n -= 8
+        return res | self.read_uint(n)
 
     def read_int(self, n: int):
         x = self.read_uint(n)
@@ -97,3 +98,58 @@ class Reader:
     def read_bytes(self, n: int):
         assert self._bit_offset == 0
         return self._input.read(n)
+
+
+class Writer:
+    def __init__(self, output: BytesIO):
+        self._output = output
+        self._bit_offset = 0
+        self._current_byte = 0
+
+    def _update_bit_offset(self, n: int):
+        self._bit_offset = (self._bit_offset + n) % 8
+
+    def _maybe_flush(self):
+        if self._bit_offset == 0:
+            self._output.write(self._current_byte.to_bytes(1, byteorder='big'))
+            self._current_byte = 0
+
+    def write_uint(self, x: int, n: int):
+        if n == 0:
+            return
+
+        x_ = extract(x, n, 0, n)
+
+        # If a single aligned byte write must be performed.
+        if n == 8 and self._bit_offset == 0:
+            self._output.write(x_.to_bytes(1, byteorder='big'))
+            return
+
+        # If the bits to be written are less than a single byte and possibly
+        # not aligned.
+        if n <= 8 - self._bit_offset:
+            self._current_byte |= x_ << (8 - self._bit_offset - n)
+            self._update_bit_offset(n)
+            self._maybe_flush()
+            return
+
+        # If the bits are spanning across the byte boundary.
+        if n <= 8:
+            bits_in_b0 = n - self._bit_offset
+            bits_in_b1 = 8 - bits_in_b0
+
+            in_b0 = extract(x, n, 0, bits_in_b0)
+            in_b1 = extract(x, n, bits_in_b0, n)
+
+            self.write_uint(in_b0, bits_in_b0)
+            self.write_uint(in_b1, bits_in_b1)
+            return
+
+        # If the bits to be written are more than 8.
+        m = n
+        while m > 8:
+            b = extract(x, n, n - m, n - m + 8)
+            self.write_uint(b, 8)
+            m -= 8
+        b = extract(x, n, n - m, n - m + 8)
+        self.write_uint(b, m)

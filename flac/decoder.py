@@ -3,7 +3,7 @@ from enum import Enum
 from functools import reduce
 from typing import Optional
 
-from flac.reader import Reader, extract, mask
+from flac.binary import Reader, extract, mask
 
 
 ###############################################################################

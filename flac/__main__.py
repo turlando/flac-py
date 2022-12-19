@@ -2,7 +2,7 @@ from pathlib import Path
 from sys import argv
 
 from flac.decoder import decode
-from flac.reader import Reader
+from flac.binary import Reader
 
 
 def main(args):
