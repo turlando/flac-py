@@ -1,5 +1,6 @@
 from pathlib import Path
 from sys import argv
+from timeit import default_timer as timer
 
 from flac.binary import Reader, Writer
 from flac.decoder import (
@@ -35,14 +36,21 @@ def main(args):
         if streaminfo_header.last is False:
             skip_metadata(r)
 
+        time_start = timer()
+
         for frame in read_frames(r, streaminfo):
             frames = decode_frame(frame)
             for channels in zip(*frames):
                 for sample in channels:
                     w.write(sample, streaminfo.sample_size)
 
-        print("Play with:")
-        print(f"    ffplay -f s{streaminfo.sample_size}be "
+        time_end = timer()
+
+        delta = '{0:.6g}'.format(time_end - time_start)
+        print(f"Decoding completed in {delta} seconds")
+
+        print("Play with: "
+              f"ffplay -f s{streaminfo.sample_size}be "
               f"-ar {streaminfo.sample_rate} "
               f"-ac {streaminfo.channels} {path_out}")
 
