@@ -66,51 +66,51 @@ def test_flac_magic():
 ###############################################################################
 
 def test_writer_1():
-   b = BytesIO()
-   w = Writer(b)
+    b = BytesIO()
+    w = Writer(b)
 
-   w.write_uint(0b10101010, 8)
-   assert bin(b.getvalue()[0]) == '0b10101010'
+    w.write(0b10101010, 8)
+    assert bin(b.getvalue()[0]) == '0b10101010'
 
-   w.write_uint(0b01010101, 8)
-   assert bin(b.getvalue()[1]) == '0b1010101'
+    w.write(0b01010101, 8)
+    assert bin(b.getvalue()[1]) == '0b1010101'
 
 
 ###############################################################################
 
 def test_writer_2():
-   b = BytesIO()
-   w = Writer(b)
+    b = BytesIO()
+    w = Writer(b)
 
-   w.write_uint(0b1, 1)
-   w.write_uint(0b01, 2)
-   w.write_uint(0b010, 3)
-   w.write_uint(0b10, 2)
-   assert bin(b.getvalue()[0]) == '0b10101010'
+    w.write(0b1, 1)
+    w.write(0b01, 2)
+    w.write(0b010, 3)
+    w.write(0b10, 2)
+    assert bin(b.getvalue()[0]) == '0b10101010'
 
 
 ###############################################################################
 
 def test_writer_3():
-   b = BytesIO()
-   w = Writer(b)
+    b = BytesIO()
+    w = Writer(b)
 
-   w.write_uint(0b10000, 5)
-   w.write_uint(0b11111111, 8)
-   w.write_uint(0b001, 3)
-   assert bin(b.getvalue()[0]) == '0b10000111'
-   assert bin(b.getvalue()[1]) == '0b11111001'
+    w.write(0b10000, 5)
+    w.write(0b11111111, 8)
+    w.write(0b001, 3)
+    assert bin(b.getvalue()[0]) == '0b10000111'
+    assert bin(b.getvalue()[1]) == '0b11111001'
 
 
 ###############################################################################
 
 def test_writer_4():
-   b = BytesIO()
-   w = Writer(b)
+    b = BytesIO()
+    w = Writer(b)
 
-   w.write_uint(0b1000, 4)
-   w.write_uint(0b1111111111111111, 16)
-   w.write_uint(0b0001, 4)
-   assert bin(b.getvalue()[0]) == '0b10001111'
-   assert bin(b.getvalue()[1]) == '0b11111111'
-   assert bin(b.getvalue()[2]) == '0b11110001'
+    w.write(0b1000, 4)
+    w.write(0b1111111111111111, 16)
+    w.write(0b0001, 4)
+    assert bin(b.getvalue()[0]) == '0b10001111'
+    assert bin(b.getvalue()[1]) == '0b11111111'
+    assert bin(b.getvalue()[2]) == '0b11110001'

@@ -1,6 +1,8 @@
+from collections.abc import Iterator
 from dataclasses import dataclass
 from enum import Enum
 from functools import reduce
+from itertools import chain
 from typing import Optional
 
 from flac.binary import Reader, extract, mask
@@ -492,6 +494,7 @@ def read_wasted_bits(reader: Reader):
 @dataclass(frozen=True)
 class SubframeConstant:
     sample: int
+    block_size: int
 
     def __repr__(self):
         return "SubframeConstant()"
@@ -540,7 +543,7 @@ def read_subframe(
     match header.type_:
         case SubframeTypeConstant():
             samples = reader.read_int(sample_size_)
-            return SubframeConstant(samples)
+            return SubframeConstant(samples, block_size)
 
         case SubframeTypeVerbatim():
             samples = [
@@ -611,7 +614,8 @@ def read_residual(reader: Reader, block_size: int, predictor_order: int):
         for _ in range(partitions_count - 1)
     ]
 
-    return [partition0, *partitions]
+    # Flatten partitions of samples in a single list of samples.
+    return chain.from_iterable([partition0, *partitions])
 
 
 def read_rice_partition(
@@ -676,25 +680,76 @@ def read_frame(reader: Reader, streaminfo_sample_size: int) -> Frame:
 
 ###############################################################################
 
-def decode(reader: Reader):
-    consume_magic(reader)
+FIXED_PREDICTOR_COEFFICIENTS = (
+    (),
+    (1,),
+    (2, -1),
+    (3, -3, 1),
+    (4, -6, 4, -1)
+)
 
-    streaminfo_header = read_metadata_block_header(reader)
-    assert streaminfo_header.type == MetadataBlockType.Streaminfo
 
-    streaminfo = read_metadata_block_streaminfo(reader)
-    print(streaminfo)
+def decode_constant_subframe(subframe: SubframeConstant) -> list[int]:
+    return [subframe.sample] * subframe.block_size
 
-    print()
 
-    if streaminfo_header.last is False:
-        skip_metadata(reader)
+def decode_verbatim_subframe(subframe: SubframeVerbatim) -> list[int]:
+    return subframe.samples
 
+
+def decode_fixed_subframe(subframe: SubframeFixed) -> list[int]:
+    order = len(subframe.warmup)
+    return _decode_prediction(
+        FIXED_PREDICTOR_COEFFICIENTS[order],
+        0,
+        subframe.warmup,
+        subframe.residual
+    )
+
+
+def decode_lpc_subframe(subframe: SubframeLPC) -> list[int]:
+    return _decode_prediction(
+        subframe.coefficients,
+        subframe.shift,
+        subframe.warmup,
+        subframe.residual
+    )
+
+
+def _decode_prediction(coefficients, shift, warmup, residual) -> list[int]:
+    result = [*warmup, *residual]
+    for i in range(len(coefficients), len(result)):
+        result[i] += sum((result[i - 1 - j] * c)
+                         for (j, c) in enumerate(coefficients)) >> shift
+    return result
+
+
+###############################################################################
+
+def decode_frame(frame: Frame) -> list[list[int]]:
+    return [decode_subframe(subframe) for subframe in frame.subframes]
+
+
+def decode_subframe(subframe: Subframe) -> list[int]:
+    match subframe:
+        case SubframeConstant():
+            return decode_constant_subframe(subframe)
+        case SubframeVerbatim():
+            return decode_verbatim_subframe(subframe)
+        case SubframeFixed():
+            return decode_fixed_subframe(subframe)
+        case SubframeLPC():
+            return decode_lpc_subframe(subframe)
+
+
+###############################################################################
+
+def read_frames(
+        reader: Reader,
+        streaminfo: Streaminfo
+) -> Iterator[Frame]:
     while True:
-        frame = read_frame(reader, streaminfo.sample_size)
-        print(frame.header)
-
-        for subframe in frame.subframes:
-            print(' ' * 4, subframe)
-
-        print()
+        try:
+            yield read_frame(reader, streaminfo.sample_size)
+        except EOFError:
+            return

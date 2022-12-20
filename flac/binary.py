@@ -40,9 +40,21 @@ class Reader:
     def bits_until_byte_alignment(self):
         return 8 - self._bit_offset
 
+    def _read_byte(self):
+        b = self._input.read(1)
+        if b == b'':
+            raise EOFError()
+        return b[0]
+
+    def _read_bytes(self, n: int):
+        bs = self._input.read(n)
+        if len(bs) != n:
+            raise EOFError()
+        return bs
+
     def _maybe_read_byte(self):
         if self._bit_offset == 0:
-            self._current_byte = self._input.read(1)[0]
+            self._current_byte = self._read_byte()
         return self._current_byte
 
     def _update_bit_offset(self, n: int):
@@ -64,7 +76,7 @@ class Reader:
         # If the bits are spanning across the byte boundary.
         if n <= 8:
             buffer0 = self._maybe_read_byte()
-            buffer1 = self._input.read(1)[0]
+            buffer1 = self._read_byte()
             offset = self._bit_offset
 
             self._current_byte = buffer1
@@ -97,7 +109,7 @@ class Reader:
 
     def read_bytes(self, n: int):
         assert self._bit_offset == 0
-        return self._input.read(n)
+        return self._read_bytes(n)
 
 
 class Writer:
@@ -114,7 +126,7 @@ class Writer:
             self._output.write(self._current_byte.to_bytes(1, byteorder='big'))
             self._current_byte = 0
 
-    def write_uint(self, x: int, n: int):
+    def write(self, x: int, n: int):
         if n == 0:
             return
 
@@ -141,15 +153,15 @@ class Writer:
             in_b0 = extract(x, n, 0, bits_in_b0)
             in_b1 = extract(x, n, bits_in_b0, n)
 
-            self.write_uint(in_b0, bits_in_b0)
-            self.write_uint(in_b1, bits_in_b1)
+            self.write(in_b0, bits_in_b0)
+            self.write(in_b1, bits_in_b1)
             return
 
         # If the bits to be written are more than 8.
         m = n
         while m > 8:
             b = extract(x, n, n - m, n - m + 8)
-            self.write_uint(b, 8)
+            self.write(b, 8)
             m -= 8
         b = extract(x, n, n - m, n - m + 8)
-        self.write_uint(b, m)
+        self.write(b, m)
