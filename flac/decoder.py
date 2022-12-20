@@ -727,7 +727,26 @@ def _decode_prediction(coefficients, shift, warmup, residual) -> list[int]:
 ###############################################################################
 
 def decode_frame(frame: Frame) -> list[list[int]]:
-    return [decode_subframe(subframe) for subframe in frame.subframes]
+    s = [decode_subframe(subframe) for subframe in frame.subframes]
+
+    # Handle interchannel decorrelation
+    match frame.header.channels:
+        case Channels.L_S:
+            return [
+                s[0],
+                [c0 - c1 for c0, c1 in zip(s[0], s[1])]
+            ]
+        case Channels.S_R:
+            return [
+                [c0 + c1 for c0, c1 in zip(s[0], s[1])],
+                s[1]
+            ]
+        case Channels.M_S:
+            right = [c0 - (c1 >> 1) for c0, c1 in zip(s[0], s[1])]
+            left = [c1 + s for c1, s in zip(right, s[1])]
+            return [left, right]
+        case _:
+            return s
 
 
 def decode_subframe(subframe: Subframe) -> list[int]:
