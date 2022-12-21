@@ -165,3 +165,7 @@ class Writer:
             m -= 8
         b = extract(x, n, n - m, n - m + 8)
         self.write(b, m)
+
+    def write_bytes(self, b: bytes):
+        assert self._bit_offset == 0
+        return self._output.write(b)
