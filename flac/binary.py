@@ -60,7 +60,7 @@ class Reader:
     def _update_bit_offset(self, n: int):
         self._bit_offset = (self._bit_offset + n) % 8
 
-    def read_uint(self, n: int):
+    def read_uint(self, n: int) -> int:
         if n == 0:
             return 0
 
@@ -107,7 +107,7 @@ class Reader:
         else:
             return False
 
-    def read_bytes(self, n: int):
+    def read_bytes(self, n: int) -> bytes:
         assert self._bit_offset == 0
         return self._read_bytes(n)
 

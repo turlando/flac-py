@@ -1,9 +1,10 @@
 from collections.abc import Iterator
-from functools import reduce
 from itertools import chain
 from typing import Optional
 
-from flac.binary import Reader, extract, mask
+import flac.coded_number as coded_number
+
+from flac.binary import Reader, mask
 from flac.common import (
     MetadataBlockHeader, MetadataBlockType, Streaminfo,
     BlockingStrategy,
@@ -198,34 +199,13 @@ def read_frame_header(reader: Reader) -> FrameHeader:
 
 def read_coded_number(reader: Reader):
     b0 = reader.read_uint(8)
-    r = _read_coded_number_remaining(b0)
+    r = coded_number.following_bytes(b0)
     bs = reader.read_bytes(r)
 
-    b0_ = extract(b0, 8, r + 2, 8)
-    bs_ = reduce(_read_coded_number_reduce, bs, 0)
-
-    return (b0_ << r * 6) | bs_
-
-
-def _read_coded_number_reduce(acc: int, x: int):
-    return (acc << 6) | mask(6)
-
-
-def _read_coded_number_remaining(b0: int):
-    if b0 >= 0b11111110:
-        return 6
-    if b0 >= 0b11111100:
-        return 5
-    if b0 >= 0b11111000:
-        return 4
-    if b0 >= 0b11110000:
-        return 3
-    if b0 >= 0b11100000:
-        return 2
-    if b0 >= 0b11000000:
-        return 1
-    else:
-        return 0
+    return coded_number.decode(
+        int.to_bytes(b0, 1, byteorder='big')
+        + bs
+    )
 
 
 # -----------------------------------------------------------------------------
