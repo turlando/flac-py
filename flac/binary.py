@@ -166,6 +166,12 @@ class Writer:
         b = extract(x, n, n - m, n - m + 8)
         self.write(b, m)
 
+    def write_bool(self, x: bool):
+        if x is True:
+            self.write(1, 1)
+        else:
+            self.write(0, 1)
+
     def write_bytes(self, b: bytes):
         assert self._bit_offset == 0
         return self._output.write(b)
