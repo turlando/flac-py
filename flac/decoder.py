@@ -6,6 +6,7 @@ import flac.coded_number as coded_number
 
 from flac.binary import Reader, mask
 from flac.common import (
+    MAGIC,
     MetadataBlockHeader, MetadataBlockType, Streaminfo,
     BlockingStrategy,
     BlockSize, BlockSizeValue, BlockSizeUncommon8, BlockSizeUncommon16,
@@ -24,11 +25,8 @@ from flac.common import (
 
 # -----------------------------------------------------------------------------
 
-MAGIC = int.from_bytes(b'fLaC', byteorder='big')
-
-
 def consume_magic(reader: Reader):
-    assert reader.read_uint(4 * 8) == MAGIC
+    assert reader.read_bytes(4) == MAGIC
 
 
 # -----------------------------------------------------------------------------
