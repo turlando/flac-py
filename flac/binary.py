@@ -1,4 +1,4 @@
-from io import BytesIO
+from io import BufferedReader, BufferedWriter
 
 
 def mask(n: int):
@@ -27,7 +27,7 @@ def extract(x: int, size: int, start: int, stop: int):
 
 
 class Reader:
-    def __init__(self, input: BytesIO):
+    def __init__(self, input: BufferedReader):
         self._input = input
         self._bit_offset = 0
         self._current_byte = 0
@@ -113,7 +113,7 @@ class Reader:
 
 
 class Writer:
-    def __init__(self, output: BytesIO):
+    def __init__(self, output: BufferedWriter):
         self._output = output
         self._bit_offset = 0
         self._current_byte = 0
