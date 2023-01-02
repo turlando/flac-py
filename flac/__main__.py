@@ -1,20 +1,25 @@
-from collections.abc import Iterator
+from argparse import ArgumentParser
+from enum import Enum
 from pathlib import Path
 from sys import argv
 from timeit import default_timer as timer
 
+from flac.utils import EnumAction
 from flac.binary import Reader, Writer
+from flac.common import MetadataBlockType
+from flac.wave import write_wav
 from flac.decoder import (
-    MetadataBlockType,
     consume_magic, read_metadata_block_header, read_metadata_block_streaminfo,
     skip_metadata, read_frames, decode_frame
 )
 
 
-def main(args):
-    path_in = Path(args[1])
-    path_out = Path(args[2])
+class Action(Enum):
+    Decode = 'decode'
+    Encode = 'encode'
 
+
+def decode(path_in: Path, path_out: Path):
     with (
         path_in.open('rb') as f_in,
         path_out.open('wb') as f_out
@@ -62,60 +67,20 @@ def main(args):
         print(f"Decoding completed in {delta} seconds")
 
 
-def write_wav(
-        writer: Writer,
-        sample_rate: int,
-        sample_size: int,
-        channels: int,
-        samples_count: int,
-        samples: Iterator[int]
-):
-    # FIXME: this encoder might not work with odd bytes sample_size
-    writer.write_bytes(b'RIFF')
-
-    sample_bytes = sample_size // 8
-    size = samples_count * channels * sample_bytes
-
-    writer.write_bytes((size + 36).to_bytes(4, 'little'))
-
-    writer.write_bytes(b'WAVE')
-
-    # Format Chunk ID
-    writer.write_bytes(b'fmt ')
-
-    # Chunk data size: 16 + extra format (0)
-    writer.write_bytes((16).to_bytes(4, byteorder='little'))
-
-    # Compression code: 0x0001 = PCM/uncompressed
-    writer.write_bytes((1).to_bytes(2, byteorder='little'))
-
-    # Number of channels
-    writer.write_bytes(channels.to_bytes(2, byteorder='little'))
-
-    # Sample rate
-    writer.write_bytes(sample_rate.to_bytes(4, byteorder='little'))
-
-    # Average bytes per second
-    abps = sample_rate * channels * sample_bytes
-    writer.write_bytes(abps.to_bytes(4, byteorder='little'))
-
-    # Block align
-    align = channels * sample_bytes
-    writer.write_bytes(align.to_bytes(2, byteorder='little'))
-
-    # Significant bits per sample
-    writer.write_bytes(sample_size.to_bytes(2, byteorder='little'))
-
-    # Data Chunk ID
-    writer.write_bytes(b'data')
-
-    # Chunk size
-    writer.write_bytes(size.to_bytes(4, byteorder='little'))
-
-    for sample in samples:
-        b = sample.to_bytes(sample_bytes, byteorder='little', signed=True)
-        writer.write_bytes(b)
+def make_argument_parser():
+    parser = ArgumentParser()
+    parser.add_argument('action', action=EnumAction, type=Action)
+    parser.add_argument('infile', type=Path)
+    parser.add_argument('outfile', type=Path)
+    return parser
 
 
 if __name__ == '__main__':
-    main(argv)
+    parser = make_argument_parser()
+    args = parser.parse_args(None if argv[1:] else ['--help'])
+
+    match args.action:
+        case Action.Decode:
+            decode(args.infile, args.outfile)
+        case Action.Encode:
+            pass
