@@ -137,8 +137,8 @@ class Writer:
             self._output.write(x_.to_bytes(1, byteorder='big'))
             return
 
-        # If the bits to be written are less than a single byte and possibly
-        # not aligned.
+        # If the bits to be written can be stored in the current byte even if
+        # the write is not aligned.
         if n <= 8 - self._bit_offset:
             self._current_byte |= x_ << (8 - self._bit_offset - n)
             self._update_bit_offset(n)
@@ -147,7 +147,7 @@ class Writer:
 
         # If the bits are spanning across the byte boundary.
         if n <= 8:
-            bits_in_b0 = n - self._bit_offset
+            bits_in_b0 = 8 - self._bit_offset
             bits_in_b1 = 8 - bits_in_b0
 
             in_b0 = extract(x, n, 0, bits_in_b0)
