@@ -17,6 +17,8 @@ def mask(n: int):
 
 def extract(x: int, size: int, start: int, stop: int):
     """
+    >>> bin(extract(0b1, 1, 0, 1))
+    '0b1'
     >>> bin(extract(0b10101010, 8, 0, 8))
     '0b10101010'
     >>> bin(extract(0b10101010, 8, 2, 5))
@@ -148,7 +150,7 @@ class Writer:
         # If the bits are spanning across the byte boundary.
         if n <= 8:
             bits_in_b0 = 8 - self._bit_offset
-            bits_in_b1 = 8 - bits_in_b0
+            bits_in_b1 = n - bits_in_b0
 
             in_b0 = extract(x, n, 0, bits_in_b0)
             in_b1 = extract(x, n, bits_in_b0, n)

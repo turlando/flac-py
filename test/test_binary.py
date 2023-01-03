@@ -124,14 +124,19 @@ def test_writer_5():
 
     # Simulate writing Streaminfo that caused 'ValueError: negative shift
     # count' in extract when writing more than 8 bits.
-    w.write(0, 16)
-    w.write(0, 16)
-    w.write(0, 24)
-    w.write(0, 24)
-    w.write(0, 20)
+    w.write(0, 16)  # bytes 0, 1
+    w.write(0, 16)  # bytes 2, 3
+    w.write(0, 24)  # bytes 4, 5, 6
+    w.write(0, 24)  # bytes 7, 8, 9
+    w.write(0, 20)  # bytes 10, 11
 
     # Simulate writing Streaminfo that caused 'ValueError: negative shift
     # count' in extract when writing less than 8 bits spanning across the
     # byte boundary.
-    w.write(0, 3)
-    w.write(0, 5)
+    w.write(0b111, 3)  # bytes 11, 12
+    w.write(0b11111, 5)  # bytes 12, 13
+    w.write(0b1, 4)  # byte 13
+
+    assert b.getvalue()[12] == 0b00001111
+    assert b.getvalue()[13] == 0b11110001
+    assert w._bit_offset == 0
