@@ -163,7 +163,7 @@ class Writer:
             b = extract(x, n, n - m, n - m + 8)
             self.write(b, 8)
             m -= 8
-        b = extract(x, n, n - m, n - m + 8)
+        b = extract(x, n, n - m, n)
         self.write(b, m)
 
     def write_bool(self, x: bool):

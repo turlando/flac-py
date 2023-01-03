@@ -114,3 +114,18 @@ def test_writer_4():
     assert b.getvalue()[0] == 0b10001111
     assert b.getvalue()[1] == 0b11111111
     assert b.getvalue()[2] == 0b11110001
+
+
+# -----------------------------------------------------------------------------
+
+def test_writer_5():
+    b = BytesIO()
+    w = Writer(b)
+
+    # Simulate writing Streaminfo that caused ValueError: negative shift count
+    # in extract.
+    w.write(0, 16)
+    w.write(0, 16)
+    w.write(0, 24)
+    w.write(0, 24)
+    w.write(0, 20)
