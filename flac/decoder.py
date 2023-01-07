@@ -381,8 +381,8 @@ def read_frame(reader: Reader, streaminfo_sample_size: int) -> Frame:
         for i in range(header.channels.count)
     ]
 
-    if reader.is_byte_aligned is False:
-        padding = reader.read_uint(reader.bits_until_byte_alignment)
+    if reader.is_aligned is False:
+        padding = reader.read_uint(reader.bits_until_alignment)
         assert padding == 0
 
     crc = reader.read_uint(16)

@@ -1,6 +1,8 @@
 from io import BufferedReader, BufferedWriter
 
 
+# -----------------------------------------------------------------------------
+
 def mask(n: int):
     """
     >>> bin(mask(0))
@@ -28,39 +30,67 @@ def extract(x: int, size: int, start: int, stop: int):
     return (x >> (size - stop)) & mask(stop - start)
 
 
-class Reader:
-    def __init__(self, input: BufferedReader):
-        self._input = input
-        self._bit_offset = 0
-        self._current_byte = 0
+# -----------------------------------------------------------------------------
+
+def read(buffer: BufferedReader, n: int) -> bytes:
+    bs = buffer.read(n)
+    if bs == b'' or len(bs) != n:
+        raise EOFError()
+    return bs
+
+
+def read1(buffer: BufferedReader) -> int:
+    return read(buffer, 1)[0]
+
+
+def write1(buffer: BufferedWriter, x: int) -> int:
+    assert 0 <= x < 256
+    return buffer.write(x.to_bytes(1, byteorder='big'))
+
+
+# -----------------------------------------------------------------------------
+
+class _Binary:
+    def __init__(self):
+        self._bit_offset: int = 0
 
     @property
-    def is_byte_aligned(self):
+    def is_aligned(self) -> bool:
+        "Return True if the current offset is at the byte boundary."
         return self._bit_offset == 0
 
     @property
-    def bits_until_byte_alignment(self):
+    def bit_offset(self) -> int:
+        "Return the current bit offset"
+        return self._bit_offset
+
+    @property
+    def bits_until_alignment(self) -> int:
+        "Return the number of bits until the offset is at the byte boundary."
         return 8 - self._bit_offset
 
-    def _read_byte(self):
-        b = self._input.read(1)
-        if b == b'':
-            raise EOFError()
-        return b[0]
-
-    def _read_bytes(self, n: int):
-        bs = self._input.read(n)
-        if len(bs) != n:
-            raise EOFError()
-        return bs
-
-    def _maybe_read_byte(self):
-        if self._bit_offset == 0:
-            self._current_byte = self._read_byte()
-        return self._current_byte
-
-    def _update_bit_offset(self, n: int):
+    def _add_to_bit_offset(self, n: int):
         self._bit_offset = (self._bit_offset + n) % 8
+
+
+class Reader(_Binary):
+    def __init__(self, input: BufferedReader):
+        super().__init__()
+        self._input = input
+        self._current_byte = 0
+
+    def _read1(self) -> int:
+        b = read1(self._input)
+        self._current_byte = b
+        return b
+
+    def _readn(self, n: int) -> bytes:
+        return read(self._input, n)
+
+    def _read1_if_aligned(self) -> int:
+        if self.is_aligned is True:
+            return self._read1()
+        return self._current_byte
 
     def read_uint(self, n: int) -> int:
         if n == 0:
@@ -68,22 +98,17 @@ class Reader:
 
         # If all bits that must be read are in the same byte.
         if n <= 8 - self._bit_offset:
-            buffer = self._maybe_read_byte()
-            offset = self._bit_offset
-
-            self._update_bit_offset(n)
-
+            offset = self.bit_offset
+            buffer = self._read1_if_aligned()
+            self._add_to_bit_offset(n)
             return extract(buffer, 8, offset, offset + n)
 
         # If the bits are spanning across the byte boundary.
         if n <= 8:
-            buffer0 = self._maybe_read_byte()
-            buffer1 = self._read_byte()
-            offset = self._bit_offset
-
-            self._current_byte = buffer1
-            self._update_bit_offset(n)
-
+            offset = self.bit_offset
+            buffer0 = self._read1_if_aligned()
+            buffer1 = self._read1()
+            self._add_to_bit_offset(n)
             w = (buffer0 << 8) | buffer1
             return extract(w, 16, offset, offset + n)
 
@@ -111,21 +136,24 @@ class Reader:
 
     def read_bytes(self, n: int) -> bytes:
         assert self._bit_offset == 0
-        return self._read_bytes(n)
+        return self._readn(n)
 
 
-class Writer:
+class Writer(_Binary):
     def __init__(self, output: BufferedWriter):
+        super().__init__()
         self._output = output
-        self._bit_offset = 0
         self._current_byte = 0
 
-    def _update_bit_offset(self, n: int):
-        self._bit_offset = (self._bit_offset + n) % 8
+    def _write1(self, x: int):
+        return write1(self._output, x)
 
-    def _maybe_flush(self):
-        if self._bit_offset == 0:
-            self._output.write(self._current_byte.to_bytes(1, byteorder='big'))
+    def _writen(self, bs: bytes):
+        return self._output.write(bs)
+
+    def _flush_if_aligned(self):
+        if self.is_aligned is True:
+            self._write1(self._current_byte)
             self._current_byte = 0
 
     def write(self, x: int, n: int):
@@ -135,21 +163,21 @@ class Writer:
         x_ = extract(x, n, 0, n)
 
         # If a single aligned byte write must be performed.
-        if n == 8 and self._bit_offset == 0:
-            self._output.write(x_.to_bytes(1, byteorder='big'))
+        if n == 8 and self.is_aligned is True:
+            self._write1(x_)
             return
 
         # If the bits to be written can be stored in the current byte even if
         # the write is not aligned.
         if n <= 8 - self._bit_offset:
-            self._current_byte |= x_ << (8 - self._bit_offset - n)
-            self._update_bit_offset(n)
-            self._maybe_flush()
+            self._current_byte |= x_ << (self.bits_until_alignment - n)
+            self._add_to_bit_offset(n)
+            self._flush_if_aligned()
             return
 
         # If the bits are spanning across the byte boundary.
         if n <= 8:
-            bits_in_b0 = 8 - self._bit_offset
+            bits_in_b0 = self.bits_until_alignment
             bits_in_b1 = n - bits_in_b0
 
             in_b0 = extract(x, n, 0, bits_in_b0)
@@ -174,6 +202,6 @@ class Writer:
         else:
             self.write(0, 1)
 
-    def write_bytes(self, b: bytes):
+    def write_bytes(self, bs: bytes):
         assert self._bit_offset == 0
-        return self._output.write(b)
+        return self._writen(bs)
