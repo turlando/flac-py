@@ -6,6 +6,7 @@ from typing import Optional
 # -----------------------------------------------------------------------------
 
 MAGIC = b'fLaC'
+FRAME_SYNC_CODE = 0b111111111111100
 
 
 # -----------------------------------------------------------------------------
@@ -105,7 +106,7 @@ class SampleRateValue(Enum):
             self.V_44_1_kHz: 0b1001,
             self.V_48_kHz: 0b1010,
             self.V_96_kHz: 0b1100
-        }[self]
+        }[self.value]
 
     @classmethod
     def from_bin(cls, x: int):

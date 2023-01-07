@@ -6,7 +6,7 @@ import flac.coded_number as coded_number
 
 from flac.binary import Reader, mask
 from flac.common import (
-    MAGIC,
+    MAGIC, FRAME_SYNC_CODE,
     MetadataBlockHeader, MetadataBlockType, Streaminfo,
     BlockingStrategy,
     BlockSize, BlockSizeValue, BlockSizeUncommon8, BlockSizeUncommon16,
@@ -140,8 +140,7 @@ def read_sample_size(reader: Reader) -> SampleSize:
 # -----------------------------------------------------------------------------
 
 def read_frame_header(reader: Reader) -> FrameHeader:
-    assert reader.read_uint(14) == 0b11111111111110
-    assert reader.read_uint(1) == 0
+    assert reader.read_uint(15) == FRAME_SYNC_CODE
 
     blocking_strategy = BlockingStrategy(reader.read_uint(1))
     _block_size = read_block_size(reader)
