@@ -18,7 +18,7 @@ setup(
 
     extras_require={
         'dev': [
-            'mypy==0.971',
+            'mypy==0.991',
             'flake8==5.0.4',
             'pytest==7.2.0'
         ]
