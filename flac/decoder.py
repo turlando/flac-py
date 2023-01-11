@@ -1,80 +1,191 @@
-from collections.abc import Iterator
 from itertools import chain
-from typing import Optional
+from io import BufferedReader
+from typing import Iterator, Optional
 
 import flac.coded_number as coded_number
 
-from flac.binary import Reader, mask
+from flac.binary import Get, mask
+
 from flac.common import (
-    MAGIC, FRAME_SYNC_CODE,
+    MAGIC, FRAME_SYNC_CODE, FIXED_PREDICTOR_COEFFICIENTS,
     MetadataBlockHeader, MetadataBlockType, Streaminfo,
-    BlockingStrategy,
+    Frame, FrameHeader, Subframe, SubframeHeader,
+    SubframeType, SubframeTypeConstant, SubframeTypeVerbatim,
+    SubframeTypeFixed, SubframeTypeLPC,
+    SubframeConstant, SubframeVerbatim, SubframeFixed, SubframeLPC,
+    BlockingStrategy, Channels,
     BlockSize, BlockSizeValue, BlockSizeUncommon8, BlockSizeUncommon16,
     SampleRate, SampleRateFromStreaminfo, SampleRateValue, SampleRateUncommon8,
     SampleRateUncommon16, SampleRateUncommon16_10,
-    Channels,
-    SampleSize, SampleSizeFromStreaminfo, SampleSizeValue,
-    FrameHeader,
-    SubframeType, SubframeTypeConstant, SubframeTypeVerbatim,
-    SubframeTypeFixed, SubframeTypeLPC,
-    SubframeHeader,
-    Subframe, SubframeConstant, SubframeVerbatim, SubframeFixed, SubframeLPC,
-    Frame
+    SampleSize, SampleSizeFromStreaminfo, SampleSizeValue
 )
 
 
 # -----------------------------------------------------------------------------
 
-def consume_magic(reader: Reader):
-    assert reader.read_bytes(4) == MAGIC
+def decode(
+        buffer: BufferedReader
+) -> tuple[int, int, int, int, Iterator[list[int]]]:
+    get = Get(buffer)
+
+    assert get.bytes(4) == MAGIC
+
+    streaminfo_header = get_metadata_block_header(get)
+    assert streaminfo_header.type == MetadataBlockType.Streaminfo
+
+    streaminfo = get_metadata_block_streaminfo(get)
+
+    if streaminfo_header.last is False:
+        skip_metadata(get)
+
+    def samples() -> Iterator[list[int]]:
+        for frame in get_frames(get, streaminfo):
+            samples = decode_frame(frame)
+
+            # from [[l1, l2, l3, ...], [r1, r2, r3, ...]]
+            # to [[l1, r1], [l2, r2], [l3, r3], ...]
+            samples_ = zip(*samples)
+
+            for s in samples_:
+                yield list(s)
+
+    return (
+        streaminfo.sample_rate,
+        streaminfo.sample_size,
+        streaminfo.channels,
+        streaminfo.samples,
+        samples()
+    )
 
 
 # -----------------------------------------------------------------------------
 
-def read_metadata_block_header(reader: Reader) -> MetadataBlockHeader:
+def get_metadata_block_header(get: Get) -> MetadataBlockHeader:
     return MetadataBlockHeader(
-        last=reader.read_bool(),
-        type=MetadataBlockType(reader.read_uint(7)),
-        length=reader.read_uint(24)
+        last=get.bool(),
+        type=MetadataBlockType(get.uint(7)),
+        length=get.uint(24)
     )
 
 
-# -----------------------------------------------------------------------------
-
-def read_metadata_block_streaminfo(reader: Reader) -> Streaminfo:
+def get_metadata_block_streaminfo(get: Get) -> Streaminfo:
     return Streaminfo(
-        min_block_size=reader.read_uint(16),
-        max_block_size=reader.read_uint(16),
-        min_frame_size=reader.read_uint(24),
-        max_frame_size=reader.read_uint(24),
-        sample_rate=reader.read_uint(20),
-        channels=reader.read_uint(3) + 1,
-        sample_size=reader.read_uint(5) + 1,
-        samples=reader.read_uint(36),
-        md5=reader.read_bytes(16)
+        min_block_size=get.uint(16),
+        max_block_size=get.uint(16),
+        min_frame_size=get.uint(24),
+        max_frame_size=get.uint(24),
+        sample_rate=get.uint(20),
+        channels=get.uint(3) + 1,
+        sample_size=get.uint(5) + 1,
+        samples=get.uint(36),
+        md5=get.bytes(16)
     )
 
 
-# -----------------------------------------------------------------------------
-
-def skip_metadata(reader: Reader):
+def skip_metadata(get: Get):
     while True:
-        header = read_metadata_block_header(reader)
-        reader.read_bytes(header.length)
+        header = get_metadata_block_header(get)
+        get.bytes(header.length)
         if header.last is True:
             break
 
 
 # -----------------------------------------------------------------------------
 
-def read_blocking_strategy(reader: Reader) -> BlockingStrategy:
-    return BlockingStrategy(reader.read_uint(1))
+def get_frames(
+        get: Get,
+        streaminfo: Streaminfo
+) -> Iterator[Frame]:
+    while True:
+        try:
+            yield get_frame(get, streaminfo.sample_size)
+        except EOFError:
+            return
 
 
-# -----------------------------------------------------------------------------
+def get_frame(get: Get, streaminfo_sample_size: int) -> Frame:
+    header = get_frame_header(get)
+    sample_size = (header.sample_size or streaminfo_sample_size)
 
-def read_block_size(reader: Reader) -> BlockSize:
-    x = reader.read_uint(4)
+    subframes = [
+        get_subframe(
+            get,
+            header.block_size,
+            sample_size + header.channels.decorrelation_bit[i]
+        )
+        for i in range(header.channels.count)
+    ]
+
+    if get.is_aligned is False:
+        padding = get.uint(get.bits_until_alignment)
+        assert padding == 0
+
+    crc = get.uint(16)
+
+    return Frame(header, subframes, crc)
+
+
+def get_frame_header(get: Get) -> FrameHeader:
+    assert get.uint(15) == FRAME_SYNC_CODE
+
+    blocking_strategy = get_blocking_strategy(get)
+    _block_size = get_block_size(get)
+    _sample_rate = get_sample_rate(get)
+    channels = get_channels(get)
+    _sample_size = get_sample_size(get)
+    assert get.uint(1) == 0
+    coded_number = get_coded_number(get)
+
+    # FIXME: find a better way to make mypy happy
+    block_size: int
+    sample_rate: Optional[int]
+    sample_size: Optional[int]
+
+    match _block_size:
+        case BlockSizeUncommon8():
+            block_size = get.uint(8)
+        case BlockSizeUncommon16():
+            block_size = get.uint(16)
+        case BlockSizeValue(x):
+            block_size = x
+
+    match _sample_rate:
+        case SampleRateValue():
+            sample_rate = _sample_rate.to_int()
+        case SampleRateFromStreaminfo():
+            sample_rate = None
+        case SampleRateUncommon8():
+            sample_rate = get.uint(8)
+        case SampleRateUncommon16():
+            sample_rate = get.uint(16)
+        case SampleRateUncommon16_10():
+            sample_rate = get.uint(16) * 10
+
+    match _sample_size:
+        case SampleSizeFromStreaminfo():
+            sample_size = None
+        case SampleSizeValue():
+            sample_size = _sample_size.to_int()
+
+    crc = get.uint(8)
+
+    return FrameHeader(
+        blocking_strategy,
+        block_size,
+        sample_rate,
+        channels,
+        sample_size,
+        coded_number,
+        crc
+    )
+
+
+def get_blocking_strategy(get: Get) -> BlockingStrategy:
+    return BlockingStrategy(get.uint(1))
+
+
+def get_block_size(get: Get) -> BlockSize:
+    x = get.uint(4)
     assert 0b0000 < x < 0b1111
 
     match x:
@@ -92,10 +203,8 @@ def read_block_size(reader: Reader) -> BlockSize:
     raise ValueError(f"Cannot read block size: {bin(x)}")
 
 
-# -----------------------------------------------------------------------------
-
-def read_sample_rate(reader: Reader) -> SampleRate:
-    x = reader.read_uint(4)
+def get_sample_rate(get: Get) -> SampleRate:
+    x = get.uint(4)
     assert 0b0000 <= x < 0b1111
 
     match x:
@@ -113,18 +222,14 @@ def read_sample_rate(reader: Reader) -> SampleRate:
     raise ValueError(f"Cannot read sample rate: {bin(x)}")
 
 
-# -----------------------------------------------------------------------------
-
-def read_channels(reader: Reader) -> Channels:
-    x = reader.read_uint(4)
+def get_channels(get: Get) -> Channels:
+    x = get.uint(4)
     assert 0b0000 <= x <= 0b1010
     return Channels(x)
 
 
-# -----------------------------------------------------------------------------
-
-def read_sample_size(reader: Reader) -> SampleSize:
-    x = reader.read_uint(3)
+def get_sample_size(get: Get) -> SampleSize:
+    x = get.uint(3)
     assert 0b000 <= x <= 0b111
     assert x != 0b011
 
@@ -137,78 +242,85 @@ def read_sample_size(reader: Reader) -> SampleSize:
     raise ValueError(f"Cannot read sample size: {bin(x)}")
 
 
-# -----------------------------------------------------------------------------
+def get_coded_number(get: Get):
+    b0 = get.uint(8)
+    b0_ = int.to_bytes(b0, 1, byteorder='big')
 
-def read_frame_header(reader: Reader) -> FrameHeader:
-    assert reader.read_uint(15) == FRAME_SYNC_CODE
-
-    blocking_strategy = BlockingStrategy(reader.read_uint(1))
-    _block_size = read_block_size(reader)
-    _sample_rate = read_sample_rate(reader)
-    channels = read_channels(reader)
-    _sample_size = read_sample_size(reader)
-    assert reader.read_uint(1) == 0
-    coded_number = read_coded_number(reader)
-
-    # FIXME: find a better way to make mypy happy
-    block_size: int
-    sample_rate: Optional[int]
-    sample_size: Optional[int]
-
-    match _block_size:
-        case BlockSizeUncommon8():
-            block_size = reader.read_uint(8)
-        case BlockSizeUncommon16():
-            block_size = reader.read_uint(16)
-        case BlockSizeValue(x):
-            block_size = x
-
-    match _sample_rate:
-        case SampleRateValue():
-            sample_rate = _sample_rate.to_int()
-        case SampleRateFromStreaminfo():
-            sample_rate = None
-        case SampleRateUncommon8():
-            sample_rate = reader.read_uint(8)
-        case SampleRateUncommon16():
-            sample_rate = reader.read_uint(16)
-        case SampleRateUncommon16_10():
-            sample_rate = reader.read_uint(16) * 10
-
-    match _sample_size:
-        case SampleSizeFromStreaminfo():
-            sample_size = None
-        case SampleSizeValue():
-            sample_size = _sample_size.to_int()
-
-    crc = reader.read_uint(8)
-
-    return FrameHeader(
-        blocking_strategy,
-        block_size,
-        sample_rate,
-        channels,
-        sample_size,
-        coded_number,
-        crc
-    )
-
-
-def read_coded_number(reader: Reader):
-    b0 = reader.read_uint(8)
     r = coded_number.following_bytes(b0)
-    bs = reader.read_bytes(r)
 
-    return coded_number.decode(
-        int.to_bytes(b0, 1, byteorder='big')
-        + bs
-    )
+    if r > 0:
+        bs = get.bytes(r)
+        return coded_number.decode(
+            b0_ + bs
+        )
+    else:
+        return coded_number.decode(b0_)
 
 
 # -----------------------------------------------------------------------------
 
-def read_subframe_type(reader: Reader) -> SubframeType:
-    x = reader.read_uint(6)
+def get_subframe(
+        get: Get,
+        block_size: int,
+        sample_size: int
+) -> Subframe:
+    header = get_subframe_header(get)
+    sample_size_ = sample_size - header.wasted_bits
+
+    match header.type_:
+        case SubframeTypeConstant():
+            samples = get.sint(sample_size_)
+            return SubframeConstant(samples, block_size)
+
+        case SubframeTypeVerbatim():
+            samples = [
+                get.sint(sample_size_)
+                for _ in range(block_size)
+            ]
+            return SubframeVerbatim(samples)
+
+        case SubframeTypeFixed(order):
+            warmup_samples = [
+                get.sint(sample_size_)
+                for _ in range(order)
+            ]
+            residual = get_residual(get, block_size, order)
+            return SubframeFixed(warmup_samples, residual)
+
+        case SubframeTypeLPC(order):
+            warmup_samples = [
+                get.sint(sample_size_)
+                for _ in range(order)
+            ]
+
+            precision = get.uint(4)
+            assert 0b0000 <= precision < 0b1111
+            precision_ = precision + 1
+
+            shift = get.sint(5)
+            coefficients = [get.sint(precision_) for _ in range(order)]
+            residual = get_residual(get, block_size, order)
+
+            return SubframeLPC(
+                warmup_samples,
+                precision_,
+                shift,
+                coefficients,
+                residual
+            )
+
+
+def get_subframe_header(get: Get) -> SubframeHeader:
+    assert get.uint(1) == 0
+
+    type_ = get_subframe_type(get)
+    wasted_bits = get_wasted_bits(get)
+
+    return SubframeHeader(type_, wasted_bits)
+
+
+def get_subframe_type(get: Get) -> SubframeType:
+    x = get.uint(6)
     assert (0 <= x <= 0b000001 or
             0b001000 <= x <= 0b001100 or
             0b100000 <= x <= 0b111111)
@@ -226,84 +338,20 @@ def read_subframe_type(reader: Reader) -> SubframeType:
     raise ValueError(f"Cannot read subframe type: {bin(x)}")
 
 
-# -----------------------------------------------------------------------------
-
-def read_subframe_header(reader: Reader) -> SubframeHeader:
-    assert reader.read_uint(1) == 0
-
-    type_ = read_subframe_type(reader)
-    wasted_bits = read_wasted_bits(reader)
-
-    return SubframeHeader(type_, wasted_bits)
-
-
-def read_wasted_bits(reader: Reader):
-    b = reader.read_uint(1)
+def get_wasted_bits(get: Get):
+    b = get.uint(1)
 
     if b == 0:
         return 0
     else:
         count = 0
-        while reader.read_uint(1) == 0:
+        while get.uint(1) == 0:
             count += 1
         return count
 
 
-# -----------------------------------------------------------------------------
-
-def read_subframe(
-        reader: Reader,
-        block_size: int,
-        sample_size: int
-) -> Subframe:
-    header = read_subframe_header(reader)
-    sample_size_ = sample_size - header.wasted_bits
-
-    match header.type_:
-        case SubframeTypeConstant():
-            samples = reader.read_int(sample_size_)
-            return SubframeConstant(samples, block_size)
-
-        case SubframeTypeVerbatim():
-            samples = [
-                reader.read_int(sample_size_)
-                for _ in range(block_size)
-            ]
-            return SubframeVerbatim(samples)
-
-        case SubframeTypeFixed(order):
-            warmup_samples = [
-                reader.read_int(sample_size_)
-                for _ in range(order)
-            ]
-            residual = read_residual(reader, block_size, order)
-            return SubframeFixed(warmup_samples, residual)
-
-        case SubframeTypeLPC(order):
-            warmup_samples = [
-                reader.read_int(sample_size_)
-                for _ in range(order)
-            ]
-
-            precision = reader.read_uint(4)
-            assert 0b0000 <= precision < 0b1111
-            precision_ = precision + 1
-
-            shift = reader.read_int(5)
-            coefficients = [reader.read_int(precision_) for _ in range(order)]
-            residual = read_residual(reader, block_size, order)
-
-            return SubframeLPC(
-                warmup_samples,
-                precision_,
-                shift,
-                coefficients,
-                residual
-            )
-
-
-def read_residual(reader: Reader, block_size: int, predictor_order: int):
-    coding_method = reader.read_uint(2)
+def get_residual(get: Get, block_size: int, predictor_order: int):
+    coding_method = get.uint(2)
     assert 0b00 <= coding_method <= 0b01
 
     match coding_method:
@@ -312,21 +360,21 @@ def read_residual(reader: Reader, block_size: int, predictor_order: int):
         case 0b01:
             parameter_size = 5
 
-    partition_order = reader.read_uint(4)
+    partition_order = get.uint(4)
     partitions_count = 2 ** partition_order
 
     assert block_size % partitions_count == 0
     assert (block_size >> partition_order) > predictor_order
 
-    partition0 = read_rice_partition(
-        reader,
+    partition0 = get_rice_partition(
+        get,
         parameter_size,
         (block_size >> partition_order) - predictor_order
     )
 
     partitions = [
-        read_rice_partition(
-            reader,
+        get_rice_partition(
+            get,
             parameter_size,
             block_size >> partition_order
         )
@@ -337,103 +385,33 @@ def read_residual(reader: Reader, block_size: int, predictor_order: int):
     return chain.from_iterable([partition0, *partitions])
 
 
-def read_rice_partition(
-        reader: Reader,
+def get_rice_partition(
+        get: Get,
         parameter_size: int,
         samples_count: int
 ):
     assert 4 <= parameter_size <= 5
-    parameter = reader.read_uint(parameter_size)
+    parameter = get.uint(parameter_size)
 
     if parameter == mask(parameter_size):
-        residual_size = reader.read_uint(5)
-        return [reader.read_int(residual_size) for _ in range(samples_count)]
+        residual_size = get.uint(5)
+        return [get.sint(residual_size) for _ in range(samples_count)]
     else:
         return [
-            read_rice_int(reader, parameter)
+            get_rice_int(get, parameter)
             for _ in range(samples_count)
         ]
 
 
-def read_rice_int(reader: Reader, parameter):
+def get_rice_int(get: Get, parameter):
     msb = 0
-    while reader.read_uint(1) == 0:
+    while get.uint(1) == 0:
         msb += 1
 
-    lsb = reader.read_uint(parameter)
+    lsb = get.uint(parameter)
 
     x = (msb << parameter) | lsb
     return (x >> 1) ^ -(x & 1)
-
-
-# -----------------------------------------------------------------------------
-
-def read_frame(reader: Reader, streaminfo_sample_size: int) -> Frame:
-    header = read_frame_header(reader)
-    sample_size = (header.sample_size or streaminfo_sample_size)
-
-    subframes = [
-        read_subframe(
-            reader,
-            header.block_size,
-            sample_size + header.channels.decorrelation_bit[i]
-        )
-        for i in range(header.channels.count)
-    ]
-
-    if reader.is_aligned is False:
-        padding = reader.read_uint(reader.bits_until_alignment)
-        assert padding == 0
-
-    crc = reader.read_uint(16)
-
-    return Frame(header, subframes, crc)
-
-
-# -----------------------------------------------------------------------------
-
-FIXED_PREDICTOR_COEFFICIENTS = (
-    (),
-    (1,),
-    (2, -1),
-    (3, -3, 1),
-    (4, -6, 4, -1)
-)
-
-
-def decode_constant_subframe(subframe: SubframeConstant) -> list[int]:
-    return [subframe.sample] * subframe.block_size
-
-
-def decode_verbatim_subframe(subframe: SubframeVerbatim) -> list[int]:
-    return subframe.samples
-
-
-def decode_fixed_subframe(subframe: SubframeFixed) -> list[int]:
-    order = len(subframe.warmup)
-    return _decode_prediction(
-        FIXED_PREDICTOR_COEFFICIENTS[order],
-        0,
-        subframe.warmup,
-        subframe.residual
-    )
-
-
-def decode_lpc_subframe(subframe: SubframeLPC) -> list[int]:
-    return _decode_prediction(
-        subframe.coefficients,
-        subframe.shift,
-        subframe.warmup,
-        subframe.residual
-    )
-
-
-def _decode_prediction(coefficients, shift, warmup, residual) -> list[int]:
-    result = [*warmup, *residual]
-    for i in range(len(coefficients), len(result)):
-        result[i] += sum((result[i - 1 - j] * c)
-                         for (j, c) in enumerate(coefficients)) >> shift
-    return result
 
 
 # -----------------------------------------------------------------------------
@@ -473,14 +451,36 @@ def decode_subframe(subframe: Subframe) -> list[int]:
             return decode_lpc_subframe(subframe)
 
 
-# -----------------------------------------------------------------------------
+def decode_constant_subframe(subframe: SubframeConstant) -> list[int]:
+    return [subframe.sample] * subframe.block_size
 
-def read_frames(
-        reader: Reader,
-        streaminfo: Streaminfo
-) -> Iterator[Frame]:
-    while True:
-        try:
-            yield read_frame(reader, streaminfo.sample_size)
-        except EOFError:
-            return
+
+def decode_verbatim_subframe(subframe: SubframeVerbatim) -> list[int]:
+    return subframe.samples
+
+
+def decode_fixed_subframe(subframe: SubframeFixed) -> list[int]:
+    order = len(subframe.warmup)
+    return _decode_prediction(
+        FIXED_PREDICTOR_COEFFICIENTS[order],
+        0,
+        subframe.warmup,
+        subframe.residual
+    )
+
+
+def decode_lpc_subframe(subframe: SubframeLPC) -> list[int]:
+    return _decode_prediction(
+        subframe.coefficients,
+        subframe.shift,
+        subframe.warmup,
+        subframe.residual
+    )
+
+
+def _decode_prediction(coefficients, shift, warmup, residual) -> list[int]:
+    result = [*warmup, *residual]
+    for i in range(len(coefficients), len(result)):
+        result[i] += sum((result[i - 1 - j] * c)
+                         for (j, c) in enumerate(coefficients)) >> shift
+    return result

@@ -1,4 +1,4 @@
-from io import BufferedReader, BufferedWriter
+from io import BytesIO, BufferedIOBase
 
 
 # -----------------------------------------------------------------------------
@@ -32,18 +32,20 @@ def extract(x: int, size: int, start: int, stop: int):
 
 # -----------------------------------------------------------------------------
 
-def read(buffer: BufferedReader, n: int) -> bytes:
+def read(buffer: BufferedIOBase, n: int) -> bytes:
     bs = buffer.read(n)
+    if n < 1:
+        raise ValueError("n must be greater than zero.")
     if bs == b'' or len(bs) != n:
         raise EOFError()
     return bs
 
 
-def read1(buffer: BufferedReader) -> int:
+def read1(buffer: BufferedIOBase) -> int:
     return read(buffer, 1)[0]
 
 
-def write1(buffer: BufferedWriter, x: int) -> int:
+def write1(buffer: BufferedIOBase, x: int) -> int:
     assert 0 <= x < 256
     return buffer.write(x.to_bytes(1, byteorder='big'))
 
@@ -73,26 +75,26 @@ class _Binary:
         self._bit_offset = (self._bit_offset + n) % 8
 
 
-class Reader(_Binary):
-    def __init__(self, input: BufferedReader):
+class Get(_Binary):
+    def __init__(self, buffer: BufferedIOBase):
         super().__init__()
-        self._input = input
+        self._buffer = buffer
         self._current_byte = 0
 
     def _read1(self) -> int:
-        b = read1(self._input)
+        b = read1(self._buffer)
         self._current_byte = b
         return b
 
-    def _readn(self, n: int) -> bytes:
-        return read(self._input, n)
+    def _read(self, n: int) -> bytes:
+        return read(self._buffer, n)
 
     def _read1_if_aligned(self) -> int:
         if self.is_aligned is True:
             return self._read1()
         return self._current_byte
 
-    def read_uint(self, n: int) -> int:
+    def uint(self, n: int) -> int:
         if n == 0:
             return 0
 
@@ -120,43 +122,50 @@ class Reader(_Binary):
         # > return (self.read(8) << (n - 8)) | self.read(n - 8)
         res = 0
         while n > 8:
-            res |= self.read_uint(8) << (n - 8)
+            res |= self.uint(8) << (n - 8)
             n -= 8
-        return res | self.read_uint(n)
+        return res | self.uint(n)
 
-    def read_int(self, n: int):
-        x = self.read_uint(n)
+    def sint(self, n: int):
+        x = self.uint(n)
         return x - ((x >> (n - 1)) << n)
 
-    def read_bool(self) -> bool:
-        if self.read_uint(1) == 1:
+    def bool(self) -> bool:
+        if self.uint(1) == 1:
             return True
         else:
             return False
 
-    def read_bytes(self, n: int) -> bytes:
+    def bytes(self, n: int) -> bytes:
         assert self._bit_offset == 0
-        return self._readn(n)
+        return self._read(n)
 
 
-class Writer(_Binary):
-    def __init__(self, output: BufferedWriter):
+class Put(_Binary):
+    def __init__(
+            self,
+    ):
         super().__init__()
-        self._output = output
+        self._buffer = BytesIO()
         self._current_byte = 0
 
     def _write1(self, x: int):
-        return write1(self._output, x)
+        return write1(self._buffer, x)
 
-    def _writen(self, bs: bytes):
-        return self._output.write(bs)
+    def _write(self, bs: bytes):
+        return self._buffer.write(bs)
 
     def _flush_if_aligned(self):
         if self.is_aligned is True:
             self._write1(self._current_byte)
             self._current_byte = 0
 
-    def write(self, x: int, n: int):
+    @property
+    def buffer(self) -> bytes:
+        assert self.is_aligned is True
+        return self._buffer.getvalue()
+
+    def uint(self, x: int, n: int):
         if n == 0:
             return
 
@@ -183,25 +192,25 @@ class Writer(_Binary):
             in_b0 = extract(x, n, 0, bits_in_b0)
             in_b1 = extract(x, n, bits_in_b0, n)
 
-            self.write(in_b0, bits_in_b0)
-            self.write(in_b1, bits_in_b1)
+            self.uint(in_b0, bits_in_b0)
+            self.uint(in_b1, bits_in_b1)
             return
 
         # If the bits to be written are more than 8.
         m = n
         while m > 8:
             b = extract(x, n, n - m, n - m + 8)
-            self.write(b, 8)
+            self.uint(b, 8)
             m -= 8
         b = extract(x, n, n - m, n)
-        self.write(b, m)
+        self.uint(b, m)
 
-    def write_bool(self, x: bool):
+    def bool(self, x: bool):
         if x is True:
-            self.write(1, 1)
+            self.uint(1, 1)
         else:
-            self.write(0, 1)
+            self.uint(0, 1)
 
-    def write_bytes(self, bs: bytes):
+    def bytes(self, bs: bytes):
         assert self._bit_offset == 0
-        return self._writen(bs)
+        return self._write(bs)

@@ -8,6 +8,17 @@ from typing import Optional
 MAGIC = b'fLaC'
 FRAME_SYNC_CODE = 0b111111111111100
 
+CRC8_POLYNOMIAL = 0b1_00000111  # x^8 + x^2 + x^1 + x^0
+CRC16_POLYNOMIAL = 0b1_10000000_00000101  # x^16 + x^15 + x^2 + x^0
+
+FIXED_PREDICTOR_COEFFICIENTS = (
+    (),
+    (1,),
+    (2, -1),
+    (3, -3, 1),
+    (4, -6, 4, -1)
+)
+
 
 # -----------------------------------------------------------------------------
 
@@ -51,6 +62,29 @@ class BlockingStrategy(Enum):
 
 
 # -----------------------------------------------------------------------------
+
+BLOCK_SIZE_ENCODING = {
+    192: 0b0001,
+
+    # 0b0010 - 0b0101: 144 * (2^v)
+    # i.e. 576, 1152, 2304 or 4608
+    576: 0b0010,
+    1152: 0b0011,
+    2304: 0b0100,
+    4608: 0b0101,
+
+    # 0b1000 - 0b1111: 2^v
+    # i.e. 256, 512, 1024, 2048, 4096, 8192, 16384 or 32768
+    256: 0b1000,
+    512: 0b1001,
+    1024: 0b1010,
+    2048: 0b1011,
+    4096: 0b1100,
+    8192: 0b1101,
+    16384: 0b1110,
+    32768: 0b1111
+}
+
 
 @dataclass(frozen=True)
 class BlockSizeValue:
@@ -199,6 +233,16 @@ class Channels(Enum):
 
 # -----------------------------------------------------------------------------
 
+SAMPLE_SIZE_ENCODING = {
+    8: 0b001,
+    12: 0b010,
+    16: 0b100,
+    20: 0b101,
+    24: 0b110,
+    32: 0b111
+}
+
+
 @dataclass(frozen=True)
 class SampleSizeFromStreaminfo:
     pass
@@ -240,7 +284,7 @@ class FrameHeader:
     channels: Channels
     sample_size: Optional[int]
     coded_number: int
-    crc: int
+    crc: Optional[int] = None
 
 
 # -----------------------------------------------------------------------------
