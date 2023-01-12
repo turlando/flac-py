@@ -350,7 +350,7 @@ def get_wasted_bits(get: Get):
         return count
 
 
-def get_residual(get: Get, block_size: int, predictor_order: int):
+def get_residual(get: Get, block_size: int, predictor_order: int) -> list[int]:
     coding_method = get.uint(2)
     assert 0b00 <= coding_method <= 0b01
 
@@ -382,7 +382,7 @@ def get_residual(get: Get, block_size: int, predictor_order: int):
     ]
 
     # Flatten partitions of samples in a single list of samples.
-    return chain.from_iterable([partition0, *partitions])
+    return list(chain.from_iterable([partition0, *partitions]))
 
 
 def get_rice_partition(

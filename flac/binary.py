@@ -3,7 +3,7 @@ from io import BytesIO, BufferedIOBase
 
 # -----------------------------------------------------------------------------
 
-def mask(n: int):
+def mask(n: int) -> int:
     """
     >>> bin(mask(0))
     '0b0'
@@ -17,7 +17,7 @@ def mask(n: int):
     return (1 << n) - 1
 
 
-def extract(x: int, size: int, start: int, stop: int):
+def extract(x: int, size: int, start: int, stop: int) -> int:
     """
     >>> bin(extract(0b1, 1, 0, 1))
     '0b1'

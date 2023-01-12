@@ -127,7 +127,7 @@ class SampleRateValue(Enum):
     def values(cls):
         return set(x.value for x in cls.__members__.values())
 
-    def to_bin(self):
+    def to_bin(self) -> int:
         return {
             self.V_88_2_kHz: 0b0001,
             self.V_176_4_kHz: 0b0010,
@@ -143,7 +143,7 @@ class SampleRateValue(Enum):
         }[self.value]
 
     @classmethod
-    def from_bin(cls, x: int):
+    def from_bin(cls, x: int) -> SampleRateValue:
         return {
             0b0001: cls.V_88_2_kHz,
             0b0010: cls.V_176_4_kHz,
@@ -257,7 +257,7 @@ class SampleSizeValue(Enum):
     V_32 = 32
 
     @classmethod
-    def from_bin(cls, x: int):
+    def from_bin(cls, x: int) -> SampleSizeValue:
         return {
             0b001: cls.V_8,
             0b010: cls.V_12,
