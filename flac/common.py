@@ -1,6 +1,7 @@
 from dataclasses import dataclass
-from enum import Enum
+from enum import auto
 from typing import Optional
+from flac.utils import Enum, invert_dict
 
 
 # -----------------------------------------------------------------------------
@@ -63,6 +64,24 @@ class BlockingStrategy(Enum):
 
 # -----------------------------------------------------------------------------
 
+@dataclass(frozen=True)
+class BlockSizeValue:
+    size: int
+
+
+@dataclass(frozen=True)
+class BlockSizeUncommon8:
+    pass
+
+
+@dataclass(frozen=True)
+class BlockSizeUncommon16:
+    pass
+
+
+BlockSize = BlockSizeValue | BlockSizeUncommon8 | BlockSizeUncommon16
+
+
 BLOCK_SIZE_ENCODING = {
     192: 0b0001,
 
@@ -86,24 +105,6 @@ BLOCK_SIZE_ENCODING = {
 }
 
 
-@dataclass(frozen=True)
-class BlockSizeValue:
-    size: int
-
-
-@dataclass(frozen=True)
-class BlockSizeUncommon8:
-    pass
-
-
-@dataclass(frozen=True)
-class BlockSizeUncommon16:
-    pass
-
-
-BlockSize = BlockSizeValue | BlockSizeUncommon8 | BlockSizeUncommon16
-
-
 # -----------------------------------------------------------------------------
 
 class SampleRateFromStreaminfo:
@@ -122,44 +123,6 @@ class SampleRateValue(Enum):
     V_44_1_kHz = 44_100
     V_48_kHz = 48_000
     V_96_kHz = 96_000
-
-    @classmethod
-    def values(cls):
-        return set(x.value for x in cls.__members__.values())
-
-    def to_bin(self) -> int:
-        return {
-            self.V_88_2_kHz: 0b0001,
-            self.V_176_4_kHz: 0b0010,
-            self.V_192_kHz: 0b0011,
-            self.V_8_kHz: 0b0100,
-            self.V_16_kHz: 0b0101,
-            self.V_22_05_kHz: 0b0110,
-            self.V_24_kHz: 0b0111,
-            self.V_32_kHz: 0b1000,
-            self.V_44_1_kHz: 0b1001,
-            self.V_48_kHz: 0b1010,
-            self.V_96_kHz: 0b1100
-        }[self.value]
-
-    @classmethod
-    def from_bin(cls, x: int) -> SampleRateValue:
-        return {
-            0b0001: cls.V_88_2_kHz,
-            0b0010: cls.V_176_4_kHz,
-            0b0011: cls.V_192_kHz,
-            0b0100: cls.V_8_kHz,
-            0b0101: cls.V_16_kHz,
-            0b0110: cls.V_22_05_kHz,
-            0b0111: cls.V_24_kHz,
-            0b1000: cls.V_32_kHz,
-            0b1001: cls.V_44_1_kHz,
-            0b1010: cls.V_48_kHz,
-            0b1100: cls.V_96_kHz
-        }[x]
-
-    def to_int(self):
-        return self.value
 
 
 class SampleRateUncommon8:
@@ -183,65 +146,88 @@ SampleRate = (
 )
 
 
+SAMPLE_RATE_VALUE_ENCODING = {
+    SampleRateValue.V_88_2_kHz: 0b0001,
+    SampleRateValue.V_176_4_kHz: 0b0010,
+    SampleRateValue.V_192_kHz: 0b0011,
+    SampleRateValue.V_8_kHz: 0b0100,
+    SampleRateValue.V_16_kHz: 0b0101,
+    SampleRateValue.V_22_05_kHz: 0b0110,
+    SampleRateValue.V_24_kHz: 0b0111,
+    SampleRateValue.V_32_kHz: 0b1000,
+    SampleRateValue.V_44_1_kHz: 0b1001,
+    SampleRateValue.V_48_kHz: 0b1010,
+    SampleRateValue.V_96_kHz: 0b1100
+}
+
+SAMPLE_RATE_VALUE_DECODING = invert_dict(SAMPLE_RATE_VALUE_ENCODING)
+
+
 # -----------------------------------------------------------------------------
 
 class Channels(Enum):
-    M = 0b0000
-    L_R = 0b0001
-    L_R_C = 0b0010
-    FL_FR_BL_BR = 0b0011
-    FL_FR_FC_BL_BR = 0b0100
-    FL_FR_FC_LFE_BL_BR = 0b0101
-    FL_FR_FC_LFE_BC_SL_SR = 0b0110
-    FL_FR_FC_LFE_BL_BR_SL_SR = 0b0111
-    L_S = 0b1000
-    S_R = 0b1001
-    M_S = 0b1010
-
-    def to_bin(self) -> int:
-        return self.value
+    M = auto()
+    L_R = auto()
+    L_R_C = auto()
+    FL_FR_BL_BR = auto()
+    FL_FR_FC_BL_BR = auto()
+    FL_FR_FC_LFE_BL_BR = auto()
+    FL_FR_FC_LFE_BC_SL_SR = auto()
+    FL_FR_FC_LFE_BL_BR_SL_SR = auto()
+    L_S = auto()
+    S_R = auto()
+    M_S = auto()
 
     @property
     def count(self) -> int:
-        return {
-            Channels.M: 1,
-            Channels.L_R: 2,
-            Channels.L_R_C: 3,
-            Channels.FL_FR_BL_BR: 4,
-            Channels.FL_FR_FC_BL_BR: 5,
-            Channels.FL_FR_FC_LFE_BL_BR: 6,
-            Channels.FL_FR_FC_LFE_BC_SL_SR: 7,
-            Channels.FL_FR_FC_LFE_BL_BR_SL_SR: 8,
-            Channels.L_S: 2,
-            Channels.S_R: 2,
-            Channels.M_S: 2
-        }[self]
+        return CHANNELS_COUNT[self]
 
     @property
-    def decorrelation_bit(self):
+    def decorrelation_bit(self) -> list[int]:
         # Side channel has one extra bit in sample_size
         match self:
             case self.L_S:
-                return (0, 1)
+                return [0, 1]
             case self.S_R:
-                return (1, 0)
+                return [1, 0]
             case self.M_S:
-                return (0, 1)
+                return [0, 1]
             case _:
-                return (0,) * self.count
+                return [0] * self.count
+
+
+CHANNELS_ENCODING = {
+    Channels.M: 0b0000,
+    Channels.L_R: 0b0001,
+    Channels.L_R_C: 0b0010,
+    Channels.FL_FR_BL_BR: 0b0011,
+    Channels.FL_FR_FC_BL_BR: 0b0100,
+    Channels.FL_FR_FC_LFE_BL_BR: 0b0101,
+    Channels.FL_FR_FC_LFE_BC_SL_SR: 0b0110,
+    Channels.FL_FR_FC_LFE_BL_BR_SL_SR: 0b0111,
+    Channels.L_S: 0b1000,
+    Channels.S_R: 0b1001,
+    Channels.M_S: 0b1010
+}
+
+CHANNELS_DECODING = invert_dict(CHANNELS_ENCODING)
+
+CHANNELS_COUNT = {
+    Channels.M: 1,
+    Channels.L_R: 2,
+    Channels.L_R_C: 3,
+    Channels.FL_FR_BL_BR: 4,
+    Channels.FL_FR_FC_BL_BR: 5,
+    Channels.FL_FR_FC_LFE_BL_BR: 6,
+    Channels.FL_FR_FC_LFE_BC_SL_SR: 7,
+    Channels.FL_FR_FC_LFE_BL_BR_SL_SR: 8,
+    Channels.L_S: 2,
+    Channels.S_R: 2,
+    Channels.M_S: 2
+}
 
 
 # -----------------------------------------------------------------------------
-
-SAMPLE_SIZE_ENCODING = {
-    8: 0b001,
-    12: 0b010,
-    16: 0b100,
-    20: 0b101,
-    24: 0b110,
-    32: 0b111
-}
-
 
 @dataclass(frozen=True)
 class SampleSizeFromStreaminfo:
@@ -256,22 +242,20 @@ class SampleSizeValue(Enum):
     V_24 = 24
     V_32 = 32
 
-    @classmethod
-    def from_bin(cls, x: int) -> SampleSizeValue:
-        return {
-            0b001: cls.V_8,
-            0b010: cls.V_12,
-            0b100: cls.V_16,
-            0b101: cls.V_20,
-            0b110: cls.V_24,
-            0b111: cls.V_32
-        }[x]
-
-    def to_int(self):
-        return self.value
-
 
 SampleSize = SampleSizeFromStreaminfo | SampleSizeValue
+
+
+SAMPLE_SIZE_ENCODING = {
+    SampleSizeValue.V_8: 0b001,
+    SampleSizeValue.V_12: 0b010,
+    SampleSizeValue.V_16: 0b100,
+    SampleSizeValue.V_20: 0b101,
+    SampleSizeValue.V_24: 0b110,
+    SampleSizeValue.V_32: 0b111
+}
+
+SAMPLE_SIZE_DECODING = invert_dict(SAMPLE_SIZE_ENCODING)
 
 
 # -----------------------------------------------------------------------------

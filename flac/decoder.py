@@ -8,6 +8,8 @@ from flac.binary import Get, mask
 
 from flac.common import (
     MAGIC, FRAME_SYNC_CODE, FIXED_PREDICTOR_COEFFICIENTS,
+    SAMPLE_RATE_VALUE_DECODING, SAMPLE_SIZE_DECODING,
+    CHANNELS_DECODING,
     MetadataBlockHeader, MetadataBlockType, Streaminfo,
     Frame, FrameHeader, Subframe, SubframeHeader,
     SubframeType, SubframeTypeConstant, SubframeTypeVerbatim,
@@ -151,7 +153,7 @@ def get_frame_header(get: Get) -> FrameHeader:
 
     match _sample_rate:
         case SampleRateValue():
-            sample_rate = _sample_rate.to_int()
+            sample_rate = _sample_rate.value
         case SampleRateFromStreaminfo():
             sample_rate = None
         case SampleRateUncommon8():
@@ -165,7 +167,7 @@ def get_frame_header(get: Get) -> FrameHeader:
         case SampleSizeFromStreaminfo():
             sample_size = None
         case SampleSizeValue():
-            sample_size = _sample_size.to_int()
+            sample_size = _sample_size.value
 
     crc = get.uint(8)
 
@@ -211,7 +213,7 @@ def get_sample_rate(get: Get) -> SampleRate:
         case 0b0000:
             return SampleRateFromStreaminfo()
         case n if 0b0001 <= n <= 0b1011:
-            return SampleRateValue.from_bin(n)
+            return SAMPLE_RATE_VALUE_DECODING[n]
         case 0b1100:
             return SampleRateUncommon8()
         case 0b1101:
@@ -225,7 +227,7 @@ def get_sample_rate(get: Get) -> SampleRate:
 def get_channels(get: Get) -> Channels:
     x = get.uint(4)
     assert 0b0000 <= x <= 0b1010
-    return Channels(x)
+    return CHANNELS_DECODING[x]
 
 
 def get_sample_size(get: Get) -> SampleSize:
@@ -237,7 +239,7 @@ def get_sample_size(get: Get) -> SampleSize:
         case 0b000:
             return SampleSizeFromStreaminfo()
         case n if 0b001 <= n <= 0b111:
-            return SampleSizeValue.from_bin(n)
+            return SAMPLE_SIZE_DECODING[n]
 
     raise ValueError(f"Cannot read sample size: {bin(x)}")
 

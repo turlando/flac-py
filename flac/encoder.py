@@ -9,7 +9,8 @@ from flac.utils import batch
 from flac.common import (
     MAGIC, FRAME_SYNC_CODE,
     CRC8_POLYNOMIAL, CRC16_POLYNOMIAL,
-    BLOCK_SIZE_ENCODING, SAMPLE_SIZE_ENCODING,
+    BLOCK_SIZE_ENCODING, SAMPLE_RATE_VALUE_ENCODING, SAMPLE_SIZE_ENCODING,
+    CHANNELS_ENCODING,
     MetadataBlockHeader, MetadataBlockType, Streaminfo,
     FrameHeader, SubframeHeader,
     SubframeType, SubframeTypeConstant, SubframeTypeVerbatim,
@@ -209,11 +210,7 @@ def encode_sample_rate(sample_rate: Optional[int]) -> SampleRate:
 def encode_sample_size(size: Optional[int]) -> SampleSize:
     if size is None:
         return SampleSizeFromStreaminfo()
-
-    if maybe_size := SAMPLE_SIZE_ENCODING.get(size) is not None:
-        return SampleSizeValue(maybe_size)
-
-    raise ValueError(f"Cannot encode sample size: {size}")
+    return SAMPLE_SIZE_ENCODING[size]
 
 
 def _put_block_size(put: Put, size: BlockSize):
@@ -231,7 +228,7 @@ def _put_sample_rate(put: Put, sample_rate: SampleRate):
         case SampleRateFromStreaminfo():
             put.uint(0b0000, 4)
         case SampleRateValue() as v:
-            put.uint(v.to_bin(), 4)
+            put.uint(SAMPLE_RATE_VALUE_ENCODING[v], 4)
         case SampleRateUncommon8():
             put.uint(0b1100, 4)
         case SampleRateUncommon16():
@@ -241,7 +238,7 @@ def _put_sample_rate(put: Put, sample_rate: SampleRate):
 
 
 def _put_channels(put: Put, channels: Channels):
-    put.uint(channels.to_bin(), 4)
+    put.uint(CHANNELS_ENCODING[channels], 4)
 
 
 def _put_sample_size(put: Put, sample_size: SampleSize):

@@ -1,10 +1,12 @@
 from argparse import Action
-from enum import Enum
+from enum import Enum as _Enum
 from itertools import islice
 from typing import Iterator, Sequence, TypeVar
 
 
 T = TypeVar('T')
+K = TypeVar('K')
+V = TypeVar('V')
 
 
 def batch(it: Iterator[T], n: int):
@@ -27,13 +29,23 @@ def group(xs: Sequence[T], n: int) -> list[Sequence[T]]:
     return [xs[i:i+n] for i in range(0, len(xs), n)]
 
 
+def invert_dict(d: dict[K, V]) -> dict[V, K]:
+    return {v: k for k, v in d.items()}
+
+
+class Enum(_Enum):
+    @classmethod
+    def values(cls):
+        return set(x.value for x in cls.__members__.values())
+
+
 class EnumAction(Action):
     def __init__(self, **kwargs):
         type = kwargs.pop("type", None)
 
         if type is None:
             raise ValueError("type must be an Enum")
-        if not issubclass(type, Enum):
+        if not issubclass(type, _Enum):
             raise TypeError("type must be an Enum")
 
         kwargs.setdefault("choices", tuple(e.value for e in type))
