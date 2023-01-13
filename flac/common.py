@@ -359,3 +359,23 @@ class Frame:
     header: FrameHeader
     subframes: list[Subframe]
     crc: int
+
+
+# -----------------------------------------------------------------------------
+
+class RiceCodingMethod(Enum):
+    Rice4Bit = 4
+    Rice5Bit = 5
+
+
+@dataclass
+class RicePartition:
+    encoding_parameter: int
+    residual: list[int]
+
+
+@dataclass
+class Residual:
+    coding_method: RiceCodingMethod
+    partition_order: int
+    partitions: list[RicePartition]

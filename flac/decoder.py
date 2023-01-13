@@ -19,7 +19,8 @@ from flac.common import (
     BlockSize, BlockSizeValue, BlockSizeUncommon8, BlockSizeUncommon16,
     SampleRate, SampleRateFromStreaminfo, SampleRateValue, SampleRateUncommon8,
     SampleRateUncommon16, SampleRateUncommon16_10,
-    SampleSize, SampleSizeFromStreaminfo, SampleSizeValue
+    SampleSize, SampleSizeFromStreaminfo, SampleSizeValue,
+    Residual, RicePartition, RiceCodingMethod
 )
 
 
@@ -287,7 +288,7 @@ def get_subframe(
                 for _ in range(order)
             ]
             residual = get_residual(get, block_size, order)
-            return SubframeFixed(warmup_samples, residual)
+            return SubframeFixed(warmup_samples, decode_residual(residual))
 
         case SubframeTypeLPC(order):
             warmup_samples = [
@@ -308,7 +309,7 @@ def get_subframe(
                 precision_,
                 shift,
                 coefficients,
-                residual
+                decode_residual(residual)
             )
 
 
@@ -352,16 +353,8 @@ def get_wasted_bits(get: Get):
         return count
 
 
-def get_residual(get: Get, block_size: int, predictor_order: int) -> list[int]:
-    coding_method = get.uint(2)
-    assert 0b00 <= coding_method <= 0b01
-
-    match coding_method:
-        case 0b00:
-            parameter_size = 4
-        case 0b01:
-            parameter_size = 5
-
+def get_residual(get: Get, block_size: int, predictor_order: int) -> Residual:
+    coding_method = get_residual_coding_method(get)
     partition_order = get.uint(4)
     partitions_count = 2 ** partition_order
 
@@ -370,42 +363,56 @@ def get_residual(get: Get, block_size: int, predictor_order: int) -> list[int]:
 
     partition0 = get_rice_partition(
         get,
-        parameter_size,
+        coding_method,
         (block_size >> partition_order) - predictor_order
     )
 
     partitions = [
         get_rice_partition(
             get,
-            parameter_size,
+            coding_method,
             block_size >> partition_order
         )
         for _ in range(partitions_count - 1)
     ]
 
-    # Flatten partitions of samples in a single list of samples.
-    return list(chain.from_iterable([partition0, *partitions]))
+    return Residual(
+        coding_method=coding_method,
+        partition_order=partition_order,
+        partitions=[partition0, *partitions]
+    )
+
+
+def get_residual_coding_method(get: Get):
+    match get.uint(2):
+        case 0b00:
+            return RiceCodingMethod.Rice4Bit
+        case 0b01:
+            return RiceCodingMethod.Rice5Bit
+        case x:
+            raise ValueError(f"Cannot read coding method: {bin(x)}")
 
 
 def get_rice_partition(
         get: Get,
-        parameter_size: int,
+        coding_method: RiceCodingMethod,
         samples_count: int
-):
-    assert 4 <= parameter_size <= 5
-    parameter = get.uint(parameter_size)
+) -> RicePartition:
+    parameter = get.uint(coding_method.value)
 
-    if parameter == mask(parameter_size):
+    if parameter == mask(coding_method.value):
         residual_size = get.uint(5)
-        return [get.sint(residual_size) for _ in range(samples_count)]
+        residual = [get.sint(residual_size) for _ in range(samples_count)]
     else:
-        return [
-            get_rice_int(get, parameter)
-            for _ in range(samples_count)
-        ]
+        residual = [get_rice_int(get, parameter) for _ in range(samples_count)]
+
+    return RicePartition(
+        encoding_parameter=parameter,
+        residual=residual
+    )
 
 
-def get_rice_int(get: Get, parameter):
+def get_rice_int(get: Get, parameter: int) -> int:
     msb = 0
     while get.uint(1) == 0:
         msb += 1
@@ -414,6 +421,11 @@ def get_rice_int(get: Get, parameter):
 
     x = (msb << parameter) | lsb
     return (x >> 1) ^ -(x & 1)
+
+
+def decode_residual(residual: Residual) -> list[int]:
+    # Flatten partitions of samples in a single list of samples.
+    return list(chain.from_iterable(p.residual for p in residual.partitions))
 
 
 # -----------------------------------------------------------------------------
