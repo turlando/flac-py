@@ -210,7 +210,7 @@ def encode_sample_rate(sample_rate: Optional[int]) -> SampleRate:
 def encode_sample_size(size: Optional[int]) -> SampleSize:
     if size is None:
         return SampleSizeFromStreaminfo()
-    return SAMPLE_SIZE_ENCODING[size]
+    return SampleSizeValue(size)
 
 
 def _put_block_size(put: Put, size: BlockSize):
@@ -246,7 +246,7 @@ def _put_sample_size(put: Put, sample_size: SampleSize):
         case SampleSizeFromStreaminfo():
             put.uint(0b000, 3)
         case SampleSizeValue() as v:
-            put.uint(v.value, 3)
+            put.uint(SAMPLE_SIZE_ENCODING[v], 3)
 
 
 def _put_coded_number(put: Put, x: int):
