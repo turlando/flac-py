@@ -33,6 +33,16 @@ def invert_dict(d: dict[K, V]) -> dict[V, K]:
     return {v: k for k, v in d.items()}
 
 
+def log2i(x: int) -> int:
+    "Base 2 integer logarithm"
+    assert x > 0
+    res = 0
+    while x > 0:
+        x >>= 1
+        res += 1
+    return res - 1
+
+
 class Enum(_Enum):
     @classmethod
     def values(cls):

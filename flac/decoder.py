@@ -378,7 +378,6 @@ def get_residual(get: Get, block_size: int, predictor_order: int) -> Residual:
 
     return Residual(
         coding_method=coding_method,
-        partition_order=partition_order,
         partitions=[partition0, *partitions]
     )
 

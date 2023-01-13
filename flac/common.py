@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from enum import auto
 from typing import Optional
-from flac.utils import Enum, invert_dict
+from flac.utils import Enum, invert_dict, log2i
 
 
 # -----------------------------------------------------------------------------
@@ -373,9 +373,25 @@ class RicePartition:
     encoding_parameter: int
     residual: list[int]
 
+    def __repr__(self):
+        return ("RicePartition("
+                f"encoding_parameter={self.encoding_parameter}, "
+                f"samples_count={len(self.residual)}"
+                ")")
+
 
 @dataclass
 class Residual:
     coding_method: RiceCodingMethod
-    partition_order: int
     partitions: list[RicePartition]
+
+    @property
+    def partition_order(self) -> int:
+        return log2i(len(self.partitions))
+
+    def __repr__(self):
+        return ("Residual("
+                f"coding_method={self.coding_method}, "
+                f"partition_order={self.partition_order}, "
+                f"partitions={self.partitions}"
+                ")")
