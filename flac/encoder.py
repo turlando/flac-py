@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from typing import Iterator, Optional
 
 import flac.coded_number as coded_number
@@ -26,17 +27,21 @@ from flac.common import (
 
 # -----------------------------------------------------------------------------
 
+@dataclass
+class EncoderParameters:
+    block_size: int
+
+
+# -----------------------------------------------------------------------------
+
 def encode(
         sample_rate: int,
         sample_size: int,
         channels: int,
         frames: int,
-        samples: Iterator[list[int]]
+        samples: Iterator[list[int]],
+        parameters: EncoderParameters
 ) -> Iterator[bytes]:
-    block_size = 4608
-
-    # -------------------------------------------------------------------------
-
     yield MAGIC
 
     # -------------------------------------------------------------------------
@@ -51,8 +56,8 @@ def encode(
 
     yield put_metadata_block_streaminfo(
         Streaminfo(
-            min_block_size=block_size,
-            max_block_size=block_size,
+            min_block_size=parameters.block_size,
+            max_block_size=parameters.block_size,
             min_frame_size=0,
             max_frame_size=0,
             sample_rate=sample_rate,
@@ -65,7 +70,7 @@ def encode(
 
     # -------------------------------------------------------------------------
 
-    for i, xs in enumerate(batch(samples, block_size)):
+    for i, xs in enumerate(batch(samples, parameters.block_size)):
         block_size_ = len(xs)
 
         frame_put = put_frame_header(

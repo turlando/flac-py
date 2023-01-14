@@ -1,22 +1,25 @@
-from argparse import ArgumentParser
-from enum import Enum
+from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
 from functools import reduce
 from operator import add
 from pathlib import Path
-from sys import argv
 from timeit import default_timer as timer
 from typing import Iterator
 from wave import open as wave_open
 
-from flac.utils import EnumAction, group
+from flac.utils import group
 from flac.decoder import decode
-from flac.encoder import encode
+from flac.encoder import EncoderParameters, encode
 
 
-class Action(Enum):
-    Decode = 'decode'
-    Encode = 'encode'
+# -----------------------------------------------------------------------------
 
+ACTION_ENCODE = 'encode'
+ACTION_DECODE = 'decode'
+
+DEFAULT_BLOCK_SIZE = 4608
+
+
+# -----------------------------------------------------------------------------
 
 def cmd_decode(path_in: Path, path_out: Path):
     with (
@@ -49,11 +52,17 @@ def cmd_decode(path_in: Path, path_out: Path):
         print(f"Decoding completed in {delta} seconds")
 
 
-def cmd_encode(path_in: Path, path_out: Path):
+def cmd_encode(
+        path_in: Path,
+        path_out: Path,
+        block_size: int
+):
     with (
         wave_open(str(path_in), mode='rb') as f_in,
         path_out.open('wb') as f_out
     ):
+        parameters = EncoderParameters(block_size=block_size)
+
         sample_rate = f_in.getframerate()
         sample_size_bytes = f_in.getsampwidth()
         channels = f_in.getnchannels()
@@ -78,30 +87,68 @@ def cmd_encode(path_in: Path, path_out: Path):
                 sample_size_bytes * 8,
                 channels,
                 frames,
-                samples()
+                samples(),
+                parameters
         ):
             f_out.write(bs)
 
         time_end = timer()
 
         delta = '{0:.6g}'.format(time_end - time_start)
-        print(f"Decoding completed in {delta} seconds")
+        print(f"Encoding completed in {delta} seconds")
 
+
+# -----------------------------------------------------------------------------
 
 def make_argument_parser():
-    parser = ArgumentParser()
-    parser.add_argument('action', action=EnumAction, type=Action)
-    parser.add_argument('infile', type=Path)
-    parser.add_argument('outfile', type=Path)
+    parser = ArgumentParser(formatter_class=ArgumentDefaultsHelpFormatter)
+
+    # -------------------------------------------------------------------------
+
+    action = parser.add_subparsers(
+        title='action',
+        dest='action',
+        required=True
+    )
+
+    # -------------------------------------------------------------------------
+
+    decode = action.add_parser(
+        ACTION_DECODE,
+        formatter_class=ArgumentDefaultsHelpFormatter
+    )
+
+    decode.add_argument('infile', type=Path)
+    decode.add_argument('outfile', type=Path)
+
+    # -------------------------------------------------------------------------
+
+    encode = action.add_parser(
+        ACTION_ENCODE,
+        formatter_class=ArgumentDefaultsHelpFormatter
+    )
+
+    encode.add_argument('infile', type=Path)
+    encode.add_argument('outfile', type=Path)
+
+    encode.add_argument(
+        '-b', '--block-size',
+        type=int,
+        default=DEFAULT_BLOCK_SIZE,
+        help="blocksize in samples"
+    )
+
+    # -------------------------------------------------------------------------
+
     return parser
 
 
 if __name__ == '__main__':
     parser = make_argument_parser()
-    args = parser.parse_args(None if argv[1:] else ['--help'])
+    args = parser.parse_args()
 
-    match args.action:
-        case Action.Decode:
-            cmd_decode(args.infile, args.outfile)
-        case Action.Encode:
-            cmd_encode(args.infile, args.outfile)
+    if args.action == ACTION_DECODE:
+        cmd_decode(args.infile, args.outfile)
+
+    if args.action == ACTION_ENCODE:
+        cmd_encode(args.infile, args.outfile, args.block_size)
