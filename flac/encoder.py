@@ -5,7 +5,7 @@ import flac.coded_number as coded_number
 
 from flac.binary import Put
 from flac.crc import crc8, crc16
-from flac.utils import batch, group
+from flac.utils import batch, group, zigzag_encode
 
 from flac.common import (
     MAGIC, FRAME_SYNC_CODE,
@@ -21,7 +21,8 @@ from flac.common import (
     BlockSize, BlockSizeValue, BlockSizeUncommon8, BlockSizeUncommon16,
     SampleRate, SampleRateFromStreaminfo, SampleRateValue, SampleRateUncommon8,
     SampleRateUncommon16, SampleRateUncommon16_10,
-    SampleSize, SampleSizeFromStreaminfo, SampleSizeValue
+    SampleSize, SampleSizeFromStreaminfo, SampleSizeValue,
+    Residual, RiceCodingMethod, RicePartition, EscapedPartition
 )
 
 
@@ -290,6 +291,81 @@ def _put_subframe_verbatim(
 
 
 # -----------------------------------------------------------------------------
+
+def put_residual(put: Put, residual: Residual, sample_size: int):
+    put_residual_coding_metod(put, residual.coding_method)
+
+    for partition in residual.partitions:
+        match partition:
+            case EscapedPartition():
+                raise NotImplementedError()
+            case RicePartition() as p:
+                put_rice_partition(put, p, residual.coding_method, sample_size)
+
+
+def put_residual_coding_metod(put: Put, coding_method: RiceCodingMethod):
+    match coding_method:
+        case RiceCodingMethod.Rice4Bit:
+            put.uint(0b00, 2)
+        case RiceCodingMethod.Rice5Bit:
+            put.uint(0b01, 2)
+
+
+def put_rice_partition(
+        put: Put,
+        partition: RicePartition,
+        coding_method: RiceCodingMethod,
+        sample_size: int
+):
+    put.uint(partition.parameter, coding_method.value)
+
+    for x in partition.residual:
+        put_rice_int(put, zigzag_encode(x, sample_size), partition.parameter)
+
+
+def put_rice_int(put: Put, x: int, parameter: int):
+    m = 1 << parameter
+    q = x // m
+
+    for _ in range(q):
+        put.uint(0b0, 1)
+    put.uint(0b1, 1)
+
+    for i in range(0, parameter, -1):
+        put.uint((x >> i) & 1, 1)
+
+
+def encode_residual(
+        residuals: list[int],
+        block_size: int,
+        predictor_order: int,
+        partition_order_range: range,
+        rice_parameter_range: range
+) -> Residual:
+    (partition_order, rice_parameters) = find_rice_partition_order(
+        residuals, block_size, predictor_order,
+        partition_order_range, rice_parameter_range
+    )
+
+    method = (RiceCodingMethod.Rice4Bit
+              if all(x <= 14 for x in rice_parameters)
+              else RiceCodingMethod.Rice5Bit)
+
+    partition0_samples_count = ((block_size >> partition_order)
+                                - predictor_order)
+    partitions_samples_count = block_size >> partition_order
+
+    partition0_samples = residuals[:partition0_samples_count]
+    partitions_samples = group(residuals[partition0_samples_count:],
+                               partitions_samples_count)
+
+    partition0 = RicePartition(rice_parameters[0], partition0_samples)
+    partitions = [RicePartition(parameter, samples)
+                  for (parameter, samples)
+                  in zip(rice_parameters[1:], partitions_samples)]
+
+    return Residual(method, [partition0, *partitions])
+
 
 def find_rice_partition_order(
         residuals: list[int],
