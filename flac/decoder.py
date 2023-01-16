@@ -20,7 +20,8 @@ from flac.common import (
     SampleRate, SampleRateFromStreaminfo, SampleRateValue, SampleRateUncommon8,
     SampleRateUncommon16, SampleRateUncommon16_10,
     SampleSize, SampleSizeFromStreaminfo, SampleSizeValue,
-    Residual, RicePartition, RiceCodingMethod
+    Residual, RiceCodingMethod,
+    ResidualPartition, RicePartition, EscapedPartition
 )
 
 
@@ -396,19 +397,16 @@ def get_rice_partition(
         get: Get,
         coding_method: RiceCodingMethod,
         samples_count: int
-) -> RicePartition:
+) -> ResidualPartition:
     parameter = get.uint(coding_method.value)
 
     if parameter == mask(coding_method.value):
         residual_size = get.uint(5)
         residual = [get.sint(residual_size) for _ in range(samples_count)]
+        return EscapedPartition(residual)
     else:
         residual = [get_rice_int(get, parameter) for _ in range(samples_count)]
-
-    return RicePartition(
-        encoding_parameter=parameter,
-        residual=residual
-    )
+        return RicePartition(parameter, residual)
 
 
 def get_rice_int(get: Get, parameter: int) -> int:

@@ -314,6 +314,9 @@ class SubframeHeader:
 @dataclass(frozen=True)
 class SubframeConstant:
     sample: int
+
+    # Not in the FLAC file. Used to determine at later stages in the decoding
+    # and encoding pipelines the length of the constant block.
     block_size: int
 
     def __repr__(self):
@@ -363,27 +366,38 @@ class Frame:
 
 # -----------------------------------------------------------------------------
 
+@dataclass(frozen=True)
+class RicePartition:
+    parameter: int  # Rice parameter
+    residual: list[int]
+
+    def __repr__(self):
+        return ("RicePartition("
+                f"parameter={self.parameter}, "
+                f"samples_count={len(self.residual)}"
+                ")")
+
+
+@dataclass(frozen=True)
+class EscapedPartition:
+    residual: list[int]
+
+    def __repr__(self):
+        return f"EscapedPartition(samples_count={len(self.residual)})"
+
+
+ResidualPartition = RicePartition | EscapedPartition
+
+
 class RiceCodingMethod(Enum):
     Rice4Bit = 4
     Rice5Bit = 5
 
 
-@dataclass
-class RicePartition:
-    encoding_parameter: int
-    residual: list[int]
-
-    def __repr__(self):
-        return ("RicePartition("
-                f"encoding_parameter={self.encoding_parameter}, "
-                f"samples_count={len(self.residual)}"
-                ")")
-
-
-@dataclass
+@dataclass(frozen=True)
 class Residual:
     coding_method: RiceCodingMethod
-    partitions: list[RicePartition]
+    partitions: list[ResidualPartition]
 
     @property
     def partition_order(self) -> int:
