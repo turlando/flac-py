@@ -43,6 +43,14 @@ def log2i(x: int) -> int:
     return res - 1
 
 
+def zigzag_decode(x: int) -> int:
+    return (x >> 1) ^ -(x & 1)
+
+
+def zigzag_encode(x: int, n: int) -> int:
+    return (x >> n) ^ (x << 1)
+
+
 class Enum(_Enum):
     @classmethod
     def values(cls):

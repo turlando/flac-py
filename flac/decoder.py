@@ -5,6 +5,7 @@ from typing import Iterator, Optional
 import flac.coded_number as coded_number
 
 from flac.binary import Get, mask
+from flac.utils import zigzag_decode
 
 from flac.common import (
     MAGIC, FRAME_SYNC_CODE, FIXED_PREDICTOR_COEFFICIENTS,
@@ -405,7 +406,8 @@ def get_rice_partition(
         residual = [get.sint(residual_size) for _ in range(samples_count)]
         return EscapedPartition(residual)
     else:
-        residual = [get_rice_int(get, parameter) for _ in range(samples_count)]
+        residual = [zigzag_decode(get_rice_int(get, parameter))
+                    for _ in range(samples_count)]
         return RicePartition(parameter, residual)
 
 
@@ -416,8 +418,7 @@ def get_rice_int(get: Get, parameter: int) -> int:
 
     lsb = get.uint(parameter)
 
-    x = (msb << parameter) | lsb
-    return (x >> 1) ^ -(x & 1)
+    return (msb << parameter) | lsb
 
 
 def decode_residual(residual: Residual) -> list[int]:
