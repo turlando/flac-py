@@ -297,7 +297,7 @@ def find_rice_partition_order(
         predictor_order: int,
         partition_order_range: range,
         rice_parameter_range: range
-) -> int:
+) -> tuple[int, list[int]]:
     # The partition order MUST be so that the block size is evenly divisible by
     # the number of partitions. The partition order also MUST be so that the
     # (block size >> partition order) is larger than the predictor order.
@@ -306,7 +306,7 @@ def find_rice_partition_order(
                             and (block_size >> o) > predictor_order)]
     assert len(candidate_orders) > 0
 
-    def partitions_size(order: int) -> int:
+    def partitions_size(order: int) -> tuple[int, list[int]]:
         partition0_samples_count = (block_size >> order) - predictor_order
         partitions_samples_count = block_size >> order
 
@@ -319,34 +319,59 @@ def find_rice_partition_order(
         partitions_size = (rice_partition_size(samples, rice_parameter_range)
                            for samples in partitions_samples)
 
-        return partition0_size + sum(partitions_size)
+        # Second element in the tuple is the size
+        total_size = partition0_size[1] + sum(x[1] for x in partitions_size)
 
-    sizes = ((o, partitions_size(o)) for o in candidate_orders)
-    return min(sizes, key=lambda x: x[1])[0]
+        # First element in the tuple is a list of the rice parameters for
+        # each partition
+        partitions_orders = [partition0_size[0],
+                             *[x[0] for x in partitions_size]]
+
+        return (total_size, partitions_orders)
+
+    sizes = ((o, *partitions_size(o)) for o in candidate_orders)
+
+    # (partition order, total size of the partitions in bits,
+    # list of rice parameters for each partition)
+    order = min(sizes, key=lambda x: x[1])
+
+    # (partition order, list of the rice parameters for each partition)
+    return (order[0], order[2])
 
 
 def rice_partition_size(
         residuals: list[int],
         rice_parameter_range: range
-) -> int:
-    rice_parameter = find_rice_parameter(residuals, rice_parameter_range)
-    parameter_size = 5 if rice_parameter > 14 else 4
+) -> tuple[int, int]:
+    """
+    Return (best rice parameter for given residuals, total size of the
+    partition in bits)
+    """
+    (parameter, size) = find_rice_parameter(residuals, rice_parameter_range)
+    parameter_size = 5 if parameter > 14 else 4
 
-    return (
+    partition_size = (
         4  # number of bits to encode the partition order
         + parameter_size  # number of bits to encode the rice parameter
-        + sum(rice_size(x, rice_parameter) for x in residuals)
+        + size
     )
+
+    return (parameter, partition_size)
 
 
 def find_rice_parameter(
         residuals: list[int],
         rice_parameter_range: range
-) -> int:
+) -> tuple[int, int]:
+    """
+    Return (best rice parameter for given residuals, total size of rice
+    encoded residuals in bits)
+    """
     sizes = [sum(rice_size(x, parameter) for x in residuals)
              for parameter in rice_parameter_range]
-    return min(rice_parameter_range,
-               key=lambda x: sizes[rice_parameter_range.index(x)])
+    parameter = min(rice_parameter_range,
+                    key=lambda x: sizes[rice_parameter_range.index(x)])
+    return (parameter, sizes[rice_parameter_range.index(parameter)])
 
 
 def rice_size(x: int, parameter: int) -> int:
