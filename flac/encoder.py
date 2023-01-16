@@ -5,7 +5,7 @@ import flac.coded_number as coded_number
 
 from flac.binary import Put
 from flac.crc import crc8, crc16
-from flac.utils import batch
+from flac.utils import batch, group
 
 from flac.common import (
     MAGIC, FRAME_SYNC_CODE,
@@ -287,3 +287,70 @@ def _put_subframe_verbatim(
 ):
     for s in subframe.samples:
         put.uint(s, sample_size)
+
+
+# -----------------------------------------------------------------------------
+
+def find_rice_partition_order(
+        residuals: list[int],
+        block_size: int,
+        predictor_order: int,
+        partition_order_range: range,
+        rice_parameter_range: range
+) -> int:
+    # The partition order MUST be so that the block size is evenly divisible by
+    # the number of partitions. The partition order also MUST be so that the
+    # (block size >> partition order) is larger than the predictor order.
+    candidate_orders = [o for o in partition_order_range
+                        if (block_size % (1 << o) == 0
+                            and (block_size >> o) > predictor_order)]
+    assert len(candidate_orders) > 0
+
+    def partitions_size(order: int) -> int:
+        partition0_samples_count = (block_size >> order) - predictor_order
+        partitions_samples_count = block_size >> order
+
+        partition0_samples = residuals[:partition0_samples_count]
+        partitions_samples = group(residuals[partition0_samples_count:],
+                                   partitions_samples_count)
+
+        partition0_size = rice_partition_size(partition0_samples,
+                                              rice_parameter_range)
+        partitions_size = (rice_partition_size(samples, rice_parameter_range)
+                           for samples in partitions_samples)
+
+        return partition0_size + sum(partitions_size)
+
+    sizes = ((o, partitions_size(o)) for o in candidate_orders)
+    return min(sizes, key=lambda x: x[1])[0]
+
+
+def rice_partition_size(
+        residuals: list[int],
+        rice_parameter_range: range
+) -> int:
+    rice_parameter = find_rice_parameter(residuals, rice_parameter_range)
+    parameter_size = 5 if rice_parameter > 14 else 4
+
+    return (
+        4  # number of bits to encode the partition order
+        + parameter_size  # number of bits to encode the rice parameter
+        + sum(rice_size(x, rice_parameter) for x in residuals)
+    )
+
+
+def find_rice_parameter(
+        residuals: list[int],
+        rice_parameter_range: range
+) -> int:
+    sizes = [sum(rice_size(x, parameter) for x in residuals)
+             for parameter in rice_parameter_range]
+    return min(rice_parameter_range,
+               key=lambda x: sizes[rice_parameter_range.index(x)])
+
+
+def rice_size(x: int, parameter: int) -> int:
+    "Size of rice-encoded number in bits"
+    m = 1 << parameter
+    q = x // m
+    return q + 1 + parameter

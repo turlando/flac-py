@@ -1,7 +1,7 @@
 from argparse import Action
 from enum import Enum as _Enum
 from itertools import islice
-from typing import Iterator, Sequence, TypeVar
+from typing import Iterator, TypeVar, overload
 
 
 T = TypeVar('T')
@@ -9,7 +9,7 @@ K = TypeVar('K')
 V = TypeVar('V')
 
 
-def batch(it: Iterator[T], n: int):
+def batch(it: Iterator[T], n: int) -> Iterator[list[T]]:
     """
     Batch data into tuples of length n. The last batch may be shorter.
     >>> [x for x in batch(iter('ABCDEFG'), 3)]
@@ -17,11 +17,21 @@ def batch(it: Iterator[T], n: int):
     """
     if n < 1:
         raise ValueError('n must be greater than zero')
-    while (batch := tuple(islice(it, n))):
+    while (batch := list(islice(it, n))):
         yield batch
 
 
-def group(xs: Sequence[T], n: int) -> list[Sequence[T]]:
+@overload
+def group(xs: bytes, n: int) -> list[bytes]:
+    ...
+
+
+@overload
+def group(xs: list[T], n: int) -> list[list[T]]:
+    ...
+
+
+def group(xs, n):
     """
     >>> group([1, 2, 3, 4, 5, 6], 2)
     [[1, 2], [3, 4], [5, 6]]
