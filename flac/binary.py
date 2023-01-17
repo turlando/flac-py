@@ -69,7 +69,7 @@ class _Binary:
     @property
     def bits_until_alignment(self) -> int:
         "Return the number of bits until the offset is at the byte boundary."
-        return 8 - self._bit_offset
+        return (8 - self._bit_offset) % 8
 
     def _add_to_bit_offset(self, n: int):
         self._bit_offset = (self._bit_offset + n) % 8
@@ -179,7 +179,7 @@ class Put(_Binary):
         # If the bits to be written can be stored in the current byte even if
         # the write is not aligned.
         if n <= 8 - self._bit_offset:
-            self._current_byte |= x_ << (self.bits_until_alignment - n)
+            self._current_byte |= x_ << (8 - self.bit_offset - n)
             self._add_to_bit_offset(n)
             self._flush_if_aligned()
             return
