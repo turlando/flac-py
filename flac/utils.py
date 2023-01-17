@@ -58,7 +58,9 @@ def zigzag_decode(x: int) -> int:
 
 
 def zigzag_encode(x: int, n: int) -> int:
-    return (x >> n) ^ (x << 1)
+    assert n > 0
+    assert (-1 << (n - 1)) < x < (1 << n) - 1
+    return (x >> (n - 1)) ^ (x << 1)
 
 
 class Enum(_Enum):
