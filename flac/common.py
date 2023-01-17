@@ -377,7 +377,7 @@ class Frame:
 @dataclass(frozen=True)
 class RicePartition:
     parameter: int  # Rice parameter
-    residual: list[int]
+    residual: list[int]  # Zig-zag encoded
 
     def __repr__(self):
         return ("RicePartition("

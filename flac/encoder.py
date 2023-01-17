@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from math import floor, log2
 from typing import Iterator, Optional
 
 import flac.coded_number as coded_number
@@ -10,13 +11,14 @@ from flac.utils import batch, group, zigzag_encode
 from flac.common import (
     MAGIC, FRAME_SYNC_CODE,
     CRC8_POLYNOMIAL, CRC16_POLYNOMIAL,
+    FIXED_PREDICTOR_COEFFICIENTS,
     BLOCK_SIZE_ENCODING, SAMPLE_RATE_VALUE_ENCODING, SAMPLE_SIZE_ENCODING,
     CHANNELS_ENCODING,
     MetadataBlockHeader, MetadataBlockType, Streaminfo,
     FrameHeader, SubframeHeader,
     SubframeType, SubframeTypeConstant, SubframeTypeVerbatim,
     SubframeTypeFixed, SubframeTypeLPC,
-    SubframeVerbatim,
+    SubframeVerbatim, SubframeFixed,
     BlockingStrategy, Channels,
     BlockSize, BlockSizeValue, BlockSizeUncommon8, BlockSizeUncommon16,
     SampleRate, SampleRateFromStreaminfo, SampleRateValue, SampleRateUncommon8,
@@ -86,10 +88,20 @@ def encode(
         )
 
         for c in range(channels):
-            header, subframe = encode_subframe_verbatim([x[c] for x in xs])
+            # header, subframe = encode_subframe_verbatim([x[c] for x in xs])
+            # _put_subframe_verbatim(frame_put, subframe, sample_size)
 
+            header, subframe = encode_subframe_fixed([x[c] for x in xs], 4)
             _put_subframe_header(frame_put, header)
-            _put_subframe_verbatim(frame_put, subframe, sample_size)
+            _put_subframe_fixed(
+                frame_put,
+                subframe,
+                block_size_, sample_size,
+                range(0, 17), range(0, 15)
+            )
+
+        # Frame padding
+        frame_put.uint(0b0, frame_put.bits_until_alignment)
 
         # Frame footer
         frame_put.uint(crc16(frame_put.buffer, CRC16_POLYNOMIAL), 16)
@@ -260,6 +272,31 @@ def encode_subframe_verbatim(
     return (header, subframe)
 
 
+def encode_subframe_fixed(
+        samples: list[int],
+        order: int
+) -> tuple[SubframeHeader, SubframeFixed]:
+    assert 0 <= order <= 4
+
+    coefficients = FIXED_PREDICTOR_COEFFICIENTS[order]
+    warmup = samples[:order]
+    residual = prediction_residual(samples, coefficients)
+
+    header = SubframeHeader(SubframeTypeFixed(order=order), 0)
+    subframe = SubframeFixed(warmup, residual)
+
+    return (header, subframe)
+
+
+def prediction_residual(samples, coefficients):
+    order = len(coefficients)
+    return [
+        (samples[i]
+         - sum(samples[i - 1 - j] * c for j, c in enumerate(coefficients)))
+        for i in range(order, len(samples))
+    ]
+
+
 # -----------------------------------------------------------------------------
 
 def _put_subframe_header(put: Put, header: SubframeHeader):
@@ -275,7 +312,7 @@ def _put_subframe_type(put: Put, type: SubframeType):
         case SubframeTypeVerbatim():
             put.uint(0b000001, 6)
         case SubframeTypeFixed(order):
-            assert order <= 4
+            assert 0 <= order <= 4
             put.uint(0b001000 | order, 6)
         case SubframeTypeLPC(order):
             put.uint(0b100000 | order - 1, 6)
@@ -290,10 +327,67 @@ def _put_subframe_verbatim(
         put.uint(s, sample_size)
 
 
+def _put_subframe_fixed(
+        put: Put,
+        subframe: SubframeFixed,
+        block_size: int,
+        sample_size: int,
+        partition_order_range: range,
+        rice_parameter_range: range
+):
+    residual = encode_residual(
+        subframe.residual,
+        sample_size
+    )
+
+    for s in subframe.warmup:
+        put.uint(s, sample_size)
+    put_residual(put, residual, sample_size)
+
+
+# -----------------------------------------------------------------------------
+
+def encode_residual(
+        samples: list[int],
+        sample_size: int
+) -> Residual:
+    samples_ = [zigzag_encode(x, sample_size) for x in samples]
+    rice_parameter = find_rice_parameter(samples_)
+
+    return Residual(
+        coding_method=RiceCodingMethod.Rice4Bit,
+        partitions=[RicePartition(rice_parameter, samples_)]
+    )
+
+
+def find_rice_parameter(
+        samples: list[int],
+) -> int:
+    # Code stolen from libFLAC, stream_encoder.c, set_partitioned_rice.
+    # The following comment is present, introducing some code that has been
+    # disabled and some more code that I have not spent enough time to
+    # fully understand. What I'm doing is blindly implementing what the comment
+    # states. Here we go.
+    #
+    # we are basically calculating the size in bits of the
+    # average residual magnitude in the partition:
+    #   rice_parameter = floor(log2(mean/partition_samples))
+    # 'mean' is not a good name for the variable, it is
+    # actually the sum of magnitudes of all residual values
+    # in the partition, so the actual mean is
+    # mean/partition_samples
+    #
+    # I take some freedom on such notes, possibly being completely wrong as I
+    # yet have to master this aspect: I don't abs the samples, assuming zig-zag
+    # encoding has already been performed.
+    return floor(log2(sum(samples)/len(samples)))
+
+
 # -----------------------------------------------------------------------------
 
 def put_residual(put: Put, residual: Residual, sample_size: int):
     put_residual_coding_metod(put, residual.coding_method)
+    put.uint(residual.partition_order, 4)
 
     for partition in residual.partitions:
         match partition:
@@ -320,138 +414,16 @@ def put_rice_partition(
     put.uint(partition.parameter, coding_method.value)
 
     for x in partition.residual:
-        put_rice_int(put, zigzag_encode(x, sample_size), partition.parameter)
+        assert x >= 0
+        put_rice_int(put, x, partition.parameter)
 
 
 def put_rice_int(put: Put, x: int, parameter: int):
     m = 1 << parameter
     q = x // m
 
-    for _ in range(q):
-        put.uint(0b0, 1)
+    put.uint(0b0, q)
     put.uint(0b1, 1)
 
-    for i in range(0, parameter, -1):
+    for i in reversed(range(parameter)):
         put.uint((x >> i) & 1, 1)
-
-
-def encode_residual(
-        residuals: list[int],
-        block_size: int,
-        predictor_order: int,
-        partition_order_range: range,
-        rice_parameter_range: range
-) -> Residual:
-    (partition_order, rice_parameters) = find_rice_partition_order(
-        residuals, block_size, predictor_order,
-        partition_order_range, rice_parameter_range
-    )
-
-    method = (RiceCodingMethod.Rice4Bit
-              if all(x <= 14 for x in rice_parameters)
-              else RiceCodingMethod.Rice5Bit)
-
-    partition0_samples_count = ((block_size >> partition_order)
-                                - predictor_order)
-    partitions_samples_count = block_size >> partition_order
-
-    partition0_samples = residuals[:partition0_samples_count]
-    partitions_samples = group(residuals[partition0_samples_count:],
-                               partitions_samples_count)
-
-    partition0 = RicePartition(rice_parameters[0], partition0_samples)
-    partitions = [RicePartition(parameter, samples)
-                  for (parameter, samples)
-                  in zip(rice_parameters[1:], partitions_samples)]
-
-    return Residual(method, [partition0, *partitions])
-
-
-def find_rice_partition_order(
-        residuals: list[int],
-        block_size: int,
-        predictor_order: int,
-        partition_order_range: range,
-        rice_parameter_range: range
-) -> tuple[int, list[int]]:
-    # The partition order MUST be so that the block size is evenly divisible by
-    # the number of partitions. The partition order also MUST be so that the
-    # (block size >> partition order) is larger than the predictor order.
-    candidate_orders = [o for o in partition_order_range
-                        if (block_size % (1 << o) == 0
-                            and (block_size >> o) > predictor_order)]
-    assert len(candidate_orders) > 0
-
-    def partitions_size(order: int) -> tuple[int, list[int]]:
-        partition0_samples_count = (block_size >> order) - predictor_order
-        partitions_samples_count = block_size >> order
-
-        partition0_samples = residuals[:partition0_samples_count]
-        partitions_samples = group(residuals[partition0_samples_count:],
-                                   partitions_samples_count)
-
-        partition0_size = rice_partition_size(partition0_samples,
-                                              rice_parameter_range)
-        partitions_size = (rice_partition_size(samples, rice_parameter_range)
-                           for samples in partitions_samples)
-
-        # Second element in the tuple is the size
-        total_size = partition0_size[1] + sum(x[1] for x in partitions_size)
-
-        # First element in the tuple is a list of the rice parameters for
-        # each partition
-        partitions_orders = [partition0_size[0],
-                             *[x[0] for x in partitions_size]]
-
-        return (total_size, partitions_orders)
-
-    sizes = ((o, *partitions_size(o)) for o in candidate_orders)
-
-    # (partition order, total size of the partitions in bits,
-    # list of rice parameters for each partition)
-    order = min(sizes, key=lambda x: x[1])
-
-    # (partition order, list of the rice parameters for each partition)
-    return (order[0], order[2])
-
-
-def rice_partition_size(
-        residuals: list[int],
-        rice_parameter_range: range
-) -> tuple[int, int]:
-    """
-    Return (best rice parameter for given residuals, total size of the
-    partition in bits)
-    """
-    (parameter, size) = find_rice_parameter(residuals, rice_parameter_range)
-    parameter_size = 5 if parameter > 14 else 4
-
-    partition_size = (
-        4  # number of bits to encode the partition order
-        + parameter_size  # number of bits to encode the rice parameter
-        + size
-    )
-
-    return (parameter, partition_size)
-
-
-def find_rice_parameter(
-        residuals: list[int],
-        rice_parameter_range: range
-) -> tuple[int, int]:
-    """
-    Return (best rice parameter for given residuals, total size of rice
-    encoded residuals in bits)
-    """
-    sizes = [sum(rice_size(x, parameter) for x in residuals)
-             for parameter in rice_parameter_range]
-    parameter = min(rice_parameter_range,
-                    key=lambda x: sizes[rice_parameter_range.index(x)])
-    return (parameter, sizes[rice_parameter_range.index(parameter)])
-
-
-def rice_size(x: int, parameter: int) -> int:
-    "Size of rice-encoded number in bits"
-    m = 1 << parameter
-    q = x // m
-    return q + 1 + parameter
