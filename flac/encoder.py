@@ -86,22 +86,12 @@ def encode(
         )
 
         for c in range(channels):
-            _put_subframe_header(
-                frame_put,
-                SubframeHeader(
-                    type_=SubframeTypeVerbatim(),
-                    wasted_bits=0
-                )
-            )
+            header, subframe = encode_subframe_verbatim([x[c] for x in xs])
 
-            _put_subframe_verbatim(
-                frame_put,
-                SubframeVerbatim(
-                    samples=[x[c] for x in xs]
-                ),
-                sample_size
-            )
+            _put_subframe_header(frame_put, header)
+            _put_subframe_verbatim(frame_put, subframe, sample_size)
 
+        # Frame footer
         frame_put.uint(crc16(frame_put.buffer, CRC16_POLYNOMIAL), 16)
 
         yield frame_put.buffer
@@ -258,6 +248,16 @@ def _put_sample_size(put: Put, sample_size: SampleSize):
 def _put_coded_number(put: Put, x: int):
     x_ = coded_number.encode(x)
     put.bytes(x_)
+
+
+# -----------------------------------------------------------------------------
+
+def encode_subframe_verbatim(
+        samples: list[int]
+) -> tuple[SubframeHeader, SubframeVerbatim]:
+    header = SubframeHeader(type_=SubframeTypeVerbatim(), wasted_bits=0)
+    subframe = SubframeVerbatim(samples)
+    return (header, subframe)
 
 
 # -----------------------------------------------------------------------------

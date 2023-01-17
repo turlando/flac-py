@@ -336,8 +336,12 @@ class SubframeFixed:
     warmup: list[int]
     residual: list[int]
 
+    @property
+    def order(self) -> int:
+        return len(self.warmup)
+
     def __repr__(self):
-        return f"SubframeFixed(order={len(self.warmup)})"
+        return f"SubframeFixed(order={self.order})"
 
 
 @dataclass(frozen=True)
@@ -348,8 +352,12 @@ class SubframeLPC:
     coefficients: list[int]
     residual: list[int]
 
+    @property
+    def order(self) -> int:
+        return len(self.warmup)
+
     def __repr__(self):
-        return f"SubframeLPC(order={len(self.warmup)})"
+        return f"SubframeLPC(order={self.order})"
 
 
 Subframe = SubframeConstant | SubframeVerbatim | SubframeFixed | SubframeLPC
