@@ -9,6 +9,19 @@ K = TypeVar('K')
 V = TypeVar('V')
 
 
+def argparse_range(s: str) -> range:
+    # If a single argument is provided only the max will be present in xs
+    xs = [int(i) for i in s.split(',')]
+
+    assert 1 <= len(xs) <= 2
+    assert strictly_increasing(xs)
+
+    # Convert from [min, max] to [min, max) as range() expects
+    xs_ = [xs[0], *[x + 1 for x in xs[1:]]]
+
+    return range(*xs_)
+
+
 def batch(it: Iterator[T], n: int) -> Iterator[list[T]]:
     """
     Batch data into tuples of length n. The last batch may be shorter.
@@ -51,6 +64,10 @@ def log2i(x: int) -> int:
         x >>= 1
         res += 1
     return res - 1
+
+
+def strictly_increasing(xs: list[int]) -> bool:
+    return all(x < y for x, y in zip(xs, xs[1:]))
 
 
 def zigzag_decode(x: int) -> int:

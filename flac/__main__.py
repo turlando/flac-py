@@ -6,7 +6,7 @@ from timeit import default_timer as timer
 from typing import Iterator
 from wave import open as wave_open
 
-from flac.utils import group
+from flac.utils import argparse_range, group
 from flac.decoder import decode
 from flac.encoder import EncoderParameters, encode
 
@@ -55,13 +55,17 @@ def cmd_decode(path_in: Path, path_out: Path):
 def cmd_encode(
         path_in: Path,
         path_out: Path,
-        block_size: int
+        block_size: int,
+        rice_partition_order: range
 ):
     with (
         wave_open(str(path_in), mode='rb') as f_in,
         path_out.open('wb') as f_out
     ):
-        parameters = EncoderParameters(block_size=block_size)
+        parameters = EncoderParameters(
+            block_size=block_size,
+            rice_partition_order=rice_partition_order
+        )
 
         sample_rate = f_in.getframerate()
         sample_size_bytes = f_in.getsampwidth()
@@ -138,6 +142,14 @@ def make_argument_parser():
         help="blocksize in samples"
     )
 
+    encode.add_argument(
+        '-r', '--rice-partition-order',
+        type=argparse_range,
+        default='5',
+        help=("[min,]max residual partition order (0..15). "
+              "min defaults to 0 if unspecified.")
+    )
+
     # -------------------------------------------------------------------------
 
     return parser
@@ -151,4 +163,9 @@ if __name__ == '__main__':
         cmd_decode(args.infile, args.outfile)
 
     if args.action == ACTION_ENCODE:
-        cmd_encode(args.infile, args.outfile, args.block_size)
+        cmd_encode(
+            args.infile,
+            args.outfile,
+            args.block_size,
+            args.rice_partition_order
+        )

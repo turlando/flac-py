@@ -33,6 +33,7 @@ from flac.common import (
 @dataclass
 class EncoderParameters:
     block_size: int
+    rice_partition_order: range
 
 
 # -----------------------------------------------------------------------------
@@ -101,8 +102,10 @@ def encode(
             _put_subframe_fixed(
                 frame_put,
                 subframe,
-                block_size_, sample_size,
-                predictor_order, range(0, 17)
+                block_size_,
+                sample_size,
+                predictor_order,
+                parameters.rice_partition_order
             )
 
         # Frame padding
