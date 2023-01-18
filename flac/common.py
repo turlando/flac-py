@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from enum import auto
-from typing import Optional
+from typing import Optional, Sequence
 from flac.utils import Enum, invert_dict, log2i
 
 
@@ -405,7 +405,7 @@ class RiceCodingMethod(Enum):
 @dataclass(frozen=True)
 class Residual:
     coding_method: RiceCodingMethod
-    partitions: list[ResidualPartition]
+    partitions: Sequence[ResidualPartition]
 
     @property
     def partition_order(self) -> int:

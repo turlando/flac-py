@@ -91,13 +91,18 @@ def encode(
             # header, subframe = encode_subframe_verbatim([x[c] for x in xs])
             # _put_subframe_verbatim(frame_put, subframe, sample_size)
 
-            header, subframe = encode_subframe_fixed([x[c] for x in xs], 4)
+            predictor_order = 4
+            header, subframe = encode_subframe_fixed(
+                [x[c] for x in xs],
+                predictor_order
+            )
+
             _put_subframe_header(frame_put, header)
             _put_subframe_fixed(
                 frame_put,
                 subframe,
                 block_size_, sample_size,
-                range(0, 17), range(0, 15)
+                predictor_order, range(0, 17)
             )
 
         # Frame padding
@@ -332,12 +337,15 @@ def _put_subframe_fixed(
         subframe: SubframeFixed,
         block_size: int,
         sample_size: int,
+        predictor_order: int,
         partition_order_range: range,
-        rice_parameter_range: range
 ):
     residual = encode_residual(
         subframe.residual,
-        sample_size
+        block_size,
+        sample_size,
+        predictor_order,
+        partition_order_range
     )
 
     for s in subframe.warmup:
@@ -349,24 +357,109 @@ def _put_subframe_fixed(
 
 def encode_residual(
         samples: list[int],
-        sample_size: int
+        block_size: int,
+        sample_size: int,
+        predictor_order: int,
+        partition_order_range: range
 ) -> Residual:
     samples_ = [zigzag_encode(x, sample_size) for x in samples]
-    rice_parameter = find_rice_parameter(samples_)
 
-    return Residual(
-        coding_method=RiceCodingMethod.Rice4Bit,
-        partitions=[RicePartition(rice_parameter, samples_)]
+    partitions = rice_partitions(
+        samples_,
+        block_size,
+        predictor_order,
+        partition_order_range
     )
+
+    coding_method = (RiceCodingMethod.Rice4Bit
+                     if all(p.parameter <= 14 for p in partitions)
+                     else RiceCodingMethod.Rice5Bit)
+
+    return Residual(coding_method, partitions)
+
+
+def rice_partitions(
+        samples: list[int],  # zig-zag encoded samples
+        block_size: int,
+        predictor_order: int,
+        partition_order_range: range
+) -> list[RicePartition]:
+    # The partition order MUST be so that the block size is evenly divisible by
+    # the number of partitions. The partition order also MUST be so that the
+    # (block size >> partition order) is larger than the predictor order.
+    candidate_orders = [
+        o for o in partition_order_range
+        if (block_size % (1 << o) == 0 and (block_size >> o) > predictor_order)
+    ]
+
+    assert len(candidate_orders) > 0
+
+    # Partition configuration (how samples are grouped in partitions, list of
+    # list of samples) for each candidate partition order
+    partitions = [
+        split_samples_in_partitions(samples, o, block_size, predictor_order)
+        for o in candidate_orders
+    ]
+
+    # For each partition configuration, the size and the rice parameters for
+    # partition.
+    sizes_and_parameters = [
+        [estimate_rice_partition_size_and_parameter(p) for p in ps]
+        for ps in partitions
+    ]
+
+    sizes = [sum(x[0] for x in xs) for xs in sizes_and_parameters]
+    parameters = [[x[1] for x in xs] for xs in sizes_and_parameters]
+
+    best_configuration = min(zip(sizes, parameters, partitions),
+                             key=lambda x: x[0])
+
+    return [
+        RicePartition(parameter, samples)
+        for (parameter, samples)
+        in zip(best_configuration[1], best_configuration[2])
+    ]
+
+
+def split_samples_in_partitions(
+        samples: list[int],
+        partition_order: int,
+        block_size: int,
+        predictor_order: int
+) -> list[list[int]]:
+    "Return the given samples grouped in partitions."
+    p0_samples_ = (block_size >> partition_order) - predictor_order
+    ps_samples_ = block_size >> partition_order
+
+    p0_samples = samples[:p0_samples_]
+    ps_samples = group(samples[p0_samples_:], ps_samples_)
+
+    return [p0_samples, *ps_samples]
+
+
+def estimate_rice_partition_size_and_parameter(
+        samples: list[int]
+) -> tuple[int, int]:
+    parameter = find_rice_parameter(samples)
+    parameter_size = 5 if parameter > 14 else 4
+    size = sum(rice_size(s, parameter) for s in samples)
+
+    partition_size = (
+        4  # number of bits to encode the partition order
+        + parameter_size  # number of bits to encode the rice parameter
+        + size
+    )
+
+    return (partition_size, parameter)
 
 
 def find_rice_parameter(
-        samples: list[int],
+        samples: list[int],  # zig-zag encoded samples
 ) -> int:
     # Code stolen from libFLAC, stream_encoder.c, set_partitioned_rice.
     # The following comment is present, introducing some code that has been
-    # disabled and some more code that I have not spent enough time to
-    # fully understand. What I'm doing is blindly implementing what the comment
+    # disabled and some more code that I have not spent enough time to fully
+    # understand. What I'm doing is blindly implementing what the comment
     # states. Here we go.
     #
     # we are basically calculating the size in bits of the
@@ -380,7 +473,17 @@ def find_rice_parameter(
     # I take some freedom on such notes, possibly being completely wrong as I
     # yet have to master this aspect: I don't abs the samples, assuming zig-zag
     # encoding has already been performed.
+
+    # TODO: assert that found value is <= 14 for sample_size <= 16 or that it
+    #       is <= 30 otherwise.
     return floor(log2(sum(samples)/len(samples)))
+
+
+def rice_size(x: int, parameter: int) -> int:
+    "Size of rice-encoded number in bits"
+    m = 1 << parameter
+    q = x // m
+    return q + 1 + parameter
 
 
 # -----------------------------------------------------------------------------
