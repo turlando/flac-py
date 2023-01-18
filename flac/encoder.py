@@ -92,11 +92,7 @@ def encode(
             # header, subframe = encode_subframe_verbatim([x[c] for x in xs])
             # _put_subframe_verbatim(frame_put, subframe, sample_size)
 
-            predictor_order = 4
-            header, subframe = encode_subframe_fixed(
-                [x[c] for x in xs],
-                predictor_order
-            )
+            header, subframe = encode_subframe_fixed([x[c] for x in xs])
 
             _put_subframe_header(frame_put, header)
             _put_subframe_fixed(
@@ -104,7 +100,7 @@ def encode(
                 subframe,
                 block_size_,
                 sample_size,
-                predictor_order,
+                subframe.order,
                 parameters.rice_partition_order
             )
 
@@ -282,13 +278,25 @@ def encode_subframe_verbatim(
 
 def encode_subframe_fixed(
         samples: list[int],
-        order: int
 ) -> tuple[SubframeHeader, SubframeFixed]:
-    assert 0 <= order <= 4
+    if len(samples) <= 4:
+        # If the block size is <= 4 then use order zero
+        order = 0
+        warmup = []
+        residual = prediction_residual(samples, FIXED_PREDICTOR_COEFFICIENTS[0])
+    else:
+        # Find best fixed predictor order for the given samples
+        residuals = [
+            prediction_residual(samples[o:], coefficients)
+            for o, coefficients in enumerate(FIXED_PREDICTOR_COEFFICIENTS)
+        ]
 
-    coefficients = FIXED_PREDICTOR_COEFFICIENTS[order]
-    warmup = samples[:order]
-    residual = prediction_residual(samples, coefficients)
+        total_error = [sum(abs(r) for r in rs) for rs in residuals]
+
+        order = min(range(len(total_error)), key=lambda x: total_error[x])
+        coefficients = FIXED_PREDICTOR_COEFFICIENTS[order]
+        warmup = samples[:order]
+        residual = prediction_residual(samples, coefficients)
 
     header = SubframeHeader(SubframeTypeFixed(order=order), 0)
     subframe = SubframeFixed(warmup, residual)
