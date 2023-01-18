@@ -17,6 +17,7 @@ ACTION_ENCODE = 'encode'
 ACTION_DECODE = 'decode'
 
 DEFAULT_BLOCK_SIZE = 4608
+DEFAULT_RICE_PARTITION_ORDER = '5'
 
 
 # -----------------------------------------------------------------------------
@@ -139,15 +140,24 @@ def make_argument_parser():
         '-b', '--block-size',
         type=int,
         default=DEFAULT_BLOCK_SIZE,
-        help="blocksize in samples"
+        help=(
+            "Blocksize in samples. "
+            "For subset streams this must be <= 4608 if the samplerate <= "
+            "48kHz. For  subset streams with higher samplerates it must be "
+            "<= 16384."
+        ),
+        metavar='N'
     )
 
     encode.add_argument(
         '-r', '--rice-partition-order',
         type=argparse_range,
-        default='5',
-        help=("[min,]max residual partition order (0..15). "
-              "min defaults to 0 if unspecified.")
+        default=DEFAULT_RICE_PARTITION_ORDER,
+        help=(
+            "[min,]max residual partition order (0..15). min defaults to 0 if "
+            "unspecified."
+        ),
+        metavar='[M,]N'
     )
 
     # -------------------------------------------------------------------------
