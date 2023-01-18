@@ -10,6 +10,12 @@ V = TypeVar('V')
 
 
 def argparse_range(s: str) -> range:
+    """
+    >>> argparse_range('5')
+    range(0, 6)
+    >>> argparse_range('2,5')
+    range(2, 6)
+    """
     # If a single argument is provided only the max will be present in xs
     xs = [int(i) for i in s.split(',')]
 
@@ -17,16 +23,16 @@ def argparse_range(s: str) -> range:
     assert strictly_increasing(xs)
 
     # Convert from [min, max] to [min, max) as range() expects
-    xs_ = [xs[0], *[x + 1 for x in xs[1:]]]
+    xs[-1] = xs[-1] + 1
 
-    return range(*xs_)
+    return range(*xs)
 
 
 def batch(it: Iterator[T], n: int) -> Iterator[list[T]]:
     """
     Batch data into tuples of length n. The last batch may be shorter.
     >>> [x for x in batch(iter('ABCDEFG'), 3)]
-    [('A', 'B', 'C'), ('D', 'E', 'F'), ('G',)]
+    [['A', 'B', 'C'], ['D', 'E', 'F'], ['G']]
     """
     if n < 1:
         raise ValueError('n must be greater than zero')

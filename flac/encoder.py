@@ -283,7 +283,7 @@ def encode_subframe_fixed(
         # If the block size is <= 4 then use order zero
         order = 0
         warmup = []
-        residual = prediction_residual(samples, FIXED_PREDICTOR_COEFFICIENTS[0])
+        residual = prediction_residual(samples, ())
     else:
         # Find best fixed predictor order for the given samples
         residuals = [
@@ -291,7 +291,10 @@ def encode_subframe_fixed(
             for o, coefficients in enumerate(FIXED_PREDICTOR_COEFFICIENTS)
         ]
 
-        total_error = [sum(abs(r) for r in rs) for rs in residuals]
+        # mypy infers the type of total_error is Any, not sure why.
+        # Explicitly declaring the type for the moment, but might be an hint
+        # for a possible bug.
+        total_error: list[int] = [sum(abs(r) for r in rs) for rs in residuals]
 
         order = min(range(len(total_error)), key=lambda x: total_error[x])
         coefficients = FIXED_PREDICTOR_COEFFICIENTS[order]
