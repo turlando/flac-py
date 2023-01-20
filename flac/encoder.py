@@ -48,8 +48,6 @@ def encode(
 ) -> Iterator[bytes]:
     yield MAGIC
 
-    # -------------------------------------------------------------------------
-
     yield put_metadata_block_header(
         MetadataBlockHeader(
             last=True,
@@ -100,7 +98,6 @@ def encode(
                 subframe,
                 block_size_,
                 sample_size,
-                subframe.order,
                 parameters.rice_partition_order
             )
 
@@ -287,7 +284,7 @@ def encode_subframe_fixed(
     else:
         # Find best fixed predictor order for the given samples
         residuals = [
-            prediction_residual(samples[o:], coefficients)
+            prediction_residual(samples, coefficients)
             for o, coefficients in enumerate(FIXED_PREDICTOR_COEFFICIENTS)
         ]
 
@@ -299,7 +296,7 @@ def encode_subframe_fixed(
         order = min(range(len(total_error)), key=lambda x: total_error[x])
         coefficients = FIXED_PREDICTOR_COEFFICIENTS[order]
         warmup = samples[:order]
-        residual = prediction_residual(samples, coefficients)
+        residual = residuals[order]
 
     header = SubframeHeader(SubframeTypeFixed(order=order), 0)
     subframe = SubframeFixed(warmup, residual)
@@ -351,19 +348,18 @@ def _put_subframe_fixed(
         subframe: SubframeFixed,
         block_size: int,
         sample_size: int,
-        predictor_order: int,
-        partition_order_range: range,
+        partition_order_range: range
 ):
     residual = encode_residual(
         subframe.residual,
         block_size,
         sample_size,
-        predictor_order,
+        subframe.order,
         partition_order_range
     )
 
     for s in subframe.warmup:
-        put.uint(s, sample_size)
+        put.uint(s, sample_size)  # signed int actually
     put_residual(put, residual, sample_size)
 
 
