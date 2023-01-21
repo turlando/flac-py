@@ -35,10 +35,12 @@ class EncoderParameters:
     block_size: int
     rice_partition_order: range
     lpc_order: range
+    qlp_precision: int
 
     def __post_init__(self):
         assert self.lpc_order.start == 0
         assert self.lpc_order.stop <= 33  # Max LPC order is 32
+        assert self.qlp_precision >= 5
 
 
 # -----------------------------------------------------------------------------
@@ -102,7 +104,7 @@ def encode(
             # header, subframe = encode_subframe_fixed(samples_)
 
             header, subframe = encode_subframe_lpc(
-                samples_, parameters.lpc_order, 5
+                samples_, parameters.lpc_order, parameters.qlp_precision
             )
 
             _put_subframe_header(frame_put, header)

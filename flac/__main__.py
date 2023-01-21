@@ -17,8 +17,9 @@ ACTION_ENCODE = 'encode'
 ACTION_DECODE = 'decode'
 
 DEFAULT_BLOCK_SIZE = 4608
-DEFAULT_RICE_PARTITION_ORDER = '5'
 DEFAULT_MAX_LPC_ORDER = 12
+DEFAULT_QLP_COEFF_PRECISION = 5
+DEFAULT_RICE_PARTITION_ORDER = '5'
 
 
 # -----------------------------------------------------------------------------
@@ -58,8 +59,9 @@ def cmd_encode(
         path_in: Path,
         path_out: Path,
         block_size: int,
-        rice_partition_order: range,
-        max_lpc_order: int
+        max_lpc_order: int,
+        qlp_coeffs_precision: int,
+        rice_partition_order: range
 ):
     with (
         wave_open(str(path_in), mode='rb') as f_in,
@@ -67,8 +69,9 @@ def cmd_encode(
     ):
         parameters = EncoderParameters(
             block_size=block_size,
-            rice_partition_order=rice_partition_order,
-            lpc_order=range(max_lpc_order + 1)
+            lpc_order=range(max_lpc_order + 1),
+            qlp_precision=qlp_coeffs_precision,
+            rice_partition_order=rice_partition_order
         )
 
         sample_rate = f_in.getframerate()
@@ -166,6 +169,17 @@ def make_argument_parser():
     )
 
     encode.add_argument(
+        '-q', '--qlp-coeff-precision',
+        type=int,
+        default=DEFAULT_QLP_COEFF_PRECISION,
+        help=(
+            "Precision of the quantized linear-predictor coefficients. "
+            "(min is 5)"
+        ),
+        metavar='N'
+    )
+
+    encode.add_argument(
         '-r', '--rice-partition-order',
         type=argparse_range,
         default=DEFAULT_RICE_PARTITION_ORDER,
@@ -193,6 +207,7 @@ if __name__ == '__main__':
             args.infile,
             args.outfile,
             args.block_size,
-            args.rice_partition_order,
-            args.max_lpc_order
+            args.max_lpc_order,
+            args.qlp_coeff_precision,
+            args.rice_partition_order
         )
