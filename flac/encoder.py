@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from math import cos, floor, frexp, log2, pi
+from math import cos, floor, log2, pi
 from typing import Iterator, Optional, Sequence
 
 import flac.coded_number as coded_number
@@ -307,7 +307,6 @@ def encode_subframe_fixed(
         total_error: list[int] = [sum(abs(r) for r in rs) for rs in residuals]
 
         order = min(range(len(total_error)), key=lambda x: total_error[x])
-        coefficients = FIXED_PREDICTOR_COEFFICIENTS[order]
         warmup = samples[:order]
         residual = residuals[order]
 
@@ -363,13 +362,12 @@ def encode_subframe_lpc(
 
     coeffs = quantized_coefficients[order]
     shift = shifts[order]
-
-    warmup = samples[:order]
+    warmup = samples[:order + 1]
     residual = residuals[order]
 
     header = SubframeHeader(SubframeTypeLPC(order=order + 1), 0)
     subframe = SubframeLPC(
-        warmup=samples[:order + 1],
+        warmup=warmup,
         precision=precision,
         shift=shift,
         coefficients=coeffs,
@@ -413,7 +411,7 @@ def levinson_durbin(
         xs: list[float],  # autocorrelation values
 ) -> list[float]:
     assert len(xs) > 1
-    
+
     order = len(xs) - 1
     coefs = [0.0] * (order + 1)
     coefs[0] = 1.0
@@ -458,7 +456,7 @@ def quantize_lpc_coefficients(
     # TODO: extract these kind of constants?
     shift_max = (1 << (5 - 1)) - 1
     shift_min = - (1 << (5 - 1))
-    
+
     shift = precision - floor(log2(coef_max)) - 2
 
     if shift > shift_max:
@@ -480,9 +478,9 @@ def quantize_lpc_coefficients(
             error -= q  # BEWARE: operaton between float and int, even if safe
             quantized_coefficients.append(q)
     else:
-        # Negative shift is very rave but possible. Due to a design flaw in FLAC,
-        # negative shift is not allowed in the decoder, so it must specially
-        # handled by scaling down the coefficients.
+        # Negative shift is very rave but possible. Due to a design flaw in
+        # FLAC, negative shift is not allowed in the decoder, so it must
+        # specially handled by scaling down the coefficients.
         nshift = - shift
         for coefficient in coefficients:
             error += coefficient * (1 << nshift)
@@ -595,7 +593,7 @@ def encode_residual(
         predictor_order: int,
         partition_order_range: range
 ) -> Residual:
-    samples_ = [zigzag_encode(x, sample_size) for x in samples]
+    samples_ = [zigzag_encode(x) for x in samples]
 
     partitions = rice_partitions(
         samples_,

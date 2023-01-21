@@ -88,9 +88,8 @@ def zigzag_decode(x: int) -> int:
     return (x >> 1) ^ -(x & 1)
 
 
-def zigzag_encode(x: int, n: int) -> int:
-    assert n > 0
-    n = 32
+def zigzag_encode(x: int) -> int:
+    n = 64  # Assuming a word is 64 bits, even if Python integers are unbounded
     assert (-1 << (n - 1)) < x < (1 << n) - 1
     return (x >> (n - 1)) ^ (x << 1)
 
