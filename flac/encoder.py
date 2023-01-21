@@ -34,6 +34,11 @@ from flac.common import (
 class EncoderParameters:
     block_size: int
     rice_partition_order: range
+    lpc_order: range
+
+    def __post_init__(self):
+        assert self.lpc_order.start == 0
+        assert self.lpc_order.stop <= 33  # Max LPC order is 32
 
 
 # -----------------------------------------------------------------------------
@@ -46,6 +51,11 @@ def encode(
         samples: Iterator[list[int]],
         parameters: EncoderParameters
 ) -> Iterator[bytes]:
+    if sample_rate <= 48_000:
+        assert parameters.lpc_order.stop <= 13
+
+    # -------------------------------------------------------------------------
+
     yield MAGIC
 
     yield put_metadata_block_header(
@@ -92,7 +102,7 @@ def encode(
             # header, subframe = encode_subframe_fixed(samples_)
 
             header, subframe = encode_subframe_lpc(
-                samples_, range(0, 13), 5
+                samples_, parameters.lpc_order, 5
             )
 
             _put_subframe_header(frame_put, header)

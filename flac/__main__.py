@@ -18,6 +18,7 @@ ACTION_DECODE = 'decode'
 
 DEFAULT_BLOCK_SIZE = 4608
 DEFAULT_RICE_PARTITION_ORDER = '5'
+DEFAULT_MAX_LPC_ORDER = 12
 
 
 # -----------------------------------------------------------------------------
@@ -57,7 +58,8 @@ def cmd_encode(
         path_in: Path,
         path_out: Path,
         block_size: int,
-        rice_partition_order: range
+        rice_partition_order: range,
+        max_lpc_order: int
 ):
     with (
         wave_open(str(path_in), mode='rb') as f_in,
@@ -65,7 +67,8 @@ def cmd_encode(
     ):
         parameters = EncoderParameters(
             block_size=block_size,
-            rice_partition_order=rice_partition_order
+            rice_partition_order=rice_partition_order,
+            lpc_order=range(max_lpc_order + 1)
         )
 
         sample_rate = f_in.getframerate()
@@ -150,6 +153,19 @@ def make_argument_parser():
     )
 
     encode.add_argument(
+        '-l', '--max-lpc-order',
+        type=int,
+        default=DEFAULT_MAX_LPC_ORDER,
+        help=(
+            "Specifies  the  maximum LPC order. This number must "
+            "be <= 32. For subset streams, it must be <=12 if the "
+            "sample rate is <=48kHz. If 0, the encoder will not attempt "
+            "generic linear prediction, and use only fixed predictors."
+        ),
+        metavar='N'
+    )
+
+    encode.add_argument(
         '-r', '--rice-partition-order',
         type=argparse_range,
         default=DEFAULT_RICE_PARTITION_ORDER,
@@ -177,5 +193,6 @@ if __name__ == '__main__':
             args.infile,
             args.outfile,
             args.block_size,
-            args.rice_partition_order
+            args.rice_partition_order,
+            args.max_lpc_order
         )
