@@ -100,30 +100,61 @@ def encode(
 
         for c in range(channels):
             samples_ = [x[c] for x in xs]
-            # header, subframe = encode_subframe_verbatim(samples_)
-            # header, subframe = encode_subframe_fixed(samples_)
 
-            header, subframe = encode_subframe_lpc(
+            # 1. Build fixed and lpc subframes.
+            #
+            # For now we're ignoring verbatim subframes, assuming a compression
+            # will always yield better results.
+            # Might not be true under some pathological conditions, but a
+            # reliable way of determining the size of each subframe has not
+            # been implemented yet.
+            # Actually, since we're at it...
+            # TODO: Implement a reliable way of determining the size of
+            # subframe structures. This could be easily done by counting the
+            # written bytes in binary.Put and using a different Put instance
+            # for each subframe+header. Once the smallest has been found there
+            # should be a way of "glueing" such Put instance into frame_put.
+            # For now, we're just measuring the magnitude of the residual in
+            # order to find the best compression method.
+            #
+            # verbatim_header, verbatim_subframe = encode_subframe_verbatim(
+            #     samples_
+            # )
+            #
+            # _put_subframe_header(frame_put, verbatim_header)
+            # _put_subframe_verbatim(frame_put, verbatim_subframe, sample_size)
+
+            fixed_header, fixed_subframe = encode_subframe_fixed(samples_)
+
+            lpc_header, lpc_subframe = encode_subframe_lpc(
                 samples_, parameters.lpc_order, parameters.qlp_precision
             )
 
-            _put_subframe_header(frame_put, header)
+            # 2. Pick the smallest subframe.
 
-            # _put_subframe_fixed(
-            #     frame_put,
-            #     subframe,
-            #     block_size_,
-            #     sample_size,
-            #     parameters.rice_partition_order
-            # )
+            fixed_size = sum(abs(x) for x in fixed_subframe.residual)
+            lpc_size = sum(abs(x) for x in lpc_subframe.residual)
 
-            _put_subframe_lpc(
-                frame_put,
-                subframe,
-                block_size_,
-                sample_size,
-                parameters.rice_partition_order
-            )
+            if fixed_size < lpc_size:
+                _put_subframe_header(frame_put, fixed_header)
+                _put_subframe_fixed(
+                    frame_put,
+                    fixed_subframe,
+                    block_size_,
+                    sample_size,
+                    parameters.rice_partition_order
+                )
+            elif lpc_size < fixed_size:
+                _put_subframe_header(frame_put, lpc_header)
+                _put_subframe_lpc(
+                    frame_put,
+                    lpc_subframe,
+                    block_size_,
+                    sample_size,
+                    parameters.rice_partition_order
+                )
+            else:
+                assert False
 
         # Frame padding
         frame_put.uint(0b0, frame_put.bits_until_alignment)
