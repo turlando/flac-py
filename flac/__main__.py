@@ -129,8 +129,8 @@ def make_argument_parser():
         formatter_class=ArgumentDefaultsHelpFormatter
     )
 
-    decode.add_argument('infile', type=Path)
-    decode.add_argument('outfile', type=Path)
+    decode.add_argument('infile', type=Path, metavar='infile.flac')
+    decode.add_argument('outfile', type=Path, metavar='outfile.wav')
 
     # -------------------------------------------------------------------------
 
@@ -139,8 +139,8 @@ def make_argument_parser():
         formatter_class=ArgumentDefaultsHelpFormatter
     )
 
-    encode.add_argument('infile', type=Path)
-    encode.add_argument('outfile', type=Path)
+    encode.add_argument('infile', type=Path, metavar='infile.wav')
+    encode.add_argument('outfile', type=Path, metavar='outfile.flac')
 
     encode.add_argument(
         '-b', '--block-size',
@@ -162,7 +162,7 @@ def make_argument_parser():
         help=(
             "Specifies  the  maximum LPC order. This number must "
             "be <= 32. For subset streams, it must be <= 12 if the "
-            "sample rate is <=48kHz."
+            "sample rate is <= 48kHz."
         ),
         metavar='N'
     )

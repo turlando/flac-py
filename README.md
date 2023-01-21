@@ -56,22 +56,23 @@ flac-py: error: the following arguments are required: action
 ```
 
 ```
-usage: flac-py decode [-h] infile outfile
+usage: flac-py decode [-h] infile.flac outfile.wav
 
 positional arguments:
-  infile
-  outfile
+  infile.flac
+  outfile.wav
 
 options:
-  -h, --help  show this help message and exit
+  -h, --help   show this help message and exit
 ```
 
 ```
-usage: flac-py encode [-h] [-b N] [-l N] [-q N] [-r [M,]N] infile outfile
+usage: flac-py encode [-h] [-b N] [-l N] [-q N] [-r [M,]N]
+                      infile.wav outfile.flac
 
 positional arguments:
-  infile
-  outfile
+  infile.wav
+  outfile.flac
 
 options:
   -h, --help            show this help message and exit
