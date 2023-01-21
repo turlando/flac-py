@@ -14,7 +14,7 @@ setup(
 
     packages=['flac'],
 
-    install_requires=[],
+    python_requires='>3.10',
 
     extras_require={
         'dev': [
@@ -24,5 +24,9 @@ setup(
         ]
     },
 
-    entry_points={}
+    entry_points={
+        'console_scripts': [
+            'flac-py = flac.__main__:main'
+        ]
+    }
 )

@@ -161,9 +161,8 @@ def make_argument_parser():
         default=DEFAULT_MAX_LPC_ORDER,
         help=(
             "Specifies  the  maximum LPC order. This number must "
-            "be <= 32. For subset streams, it must be <=12 if the "
-            "sample rate is <=48kHz. If 0, the encoder will not attempt "
-            "generic linear prediction, and use only fixed predictors."
+            "be <= 32. For subset streams, it must be <= 12 if the "
+            "sample rate is <=48kHz."
         ),
         metavar='N'
     )
@@ -195,7 +194,7 @@ def make_argument_parser():
     return parser
 
 
-if __name__ == '__main__':
+def main():
     parser = make_argument_parser()
     args = parser.parse_args()
 
@@ -211,3 +210,9 @@ if __name__ == '__main__':
             args.qlp_coeff_precision,
             args.rice_partition_order
         )
+
+
+# -----------------------------------------------------------------------------
+
+if __name__ == '__main__':
+    main()
