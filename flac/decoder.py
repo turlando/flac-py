@@ -148,9 +148,9 @@ def get_frame_header(get: Get) -> FrameHeader:
 
     match _block_size:
         case BlockSizeUncommon8():
-            block_size = get.uint(8)
+            block_size = get.uint(8) + 1
         case BlockSizeUncommon16():
-            block_size = get.uint(16)
+            block_size = get.uint(16) + 1
         case BlockSizeValue(x):
             block_size = x
 
