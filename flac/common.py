@@ -357,7 +357,8 @@ class SubframeLPC:
         return len(self.warmup)
 
     def __repr__(self):
-        return f"SubframeLPC(order={self.order})"
+        return (f"SubframeLPC(order={self.order}, precision={self.precision}, "
+                f"shift={self.shift}, coefficients={self.coefficients})")
 
 
 Subframe = SubframeConstant | SubframeVerbatim | SubframeFixed | SubframeLPC

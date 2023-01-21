@@ -1,12 +1,12 @@
 from dataclasses import dataclass
-from math import floor, log2
-from typing import Iterator, Optional
+from math import cos, floor, frexp, log2, pi
+from typing import Iterator, Optional, Sequence
 
 import flac.coded_number as coded_number
 
 from flac.binary import Put
 from flac.crc import crc8, crc16
-from flac.utils import batch, group, zigzag_encode
+from flac.utils import batch, clamp, group, zigzag_encode
 
 from flac.common import (
     MAGIC, FRAME_SYNC_CODE,
@@ -18,7 +18,7 @@ from flac.common import (
     FrameHeader, SubframeHeader,
     SubframeType, SubframeTypeConstant, SubframeTypeVerbatim,
     SubframeTypeFixed, SubframeTypeLPC,
-    SubframeVerbatim, SubframeFixed,
+    SubframeVerbatim, SubframeFixed, SubframeLPC,
     BlockingStrategy, Channels,
     BlockSize, BlockSizeValue, BlockSizeUncommon8, BlockSizeUncommon16,
     SampleRate, SampleRateFromStreaminfo, SampleRateValue, SampleRateUncommon8,
@@ -87,13 +87,25 @@ def encode(
         )
 
         for c in range(channels):
-            # header, subframe = encode_subframe_verbatim([x[c] for x in xs])
-            # _put_subframe_verbatim(frame_put, subframe, sample_size)
+            samples_ = [x[c] for x in xs]
+            # header, subframe = encode_subframe_verbatim(samples_)
+            # header, subframe = encode_subframe_fixed(samples_)
 
-            header, subframe = encode_subframe_fixed([x[c] for x in xs])
+            header, subframe = encode_subframe_lpc(
+                samples_, range(0, 13), 5
+            )
 
             _put_subframe_header(frame_put, header)
-            _put_subframe_fixed(
+
+            # _put_subframe_fixed(
+            #     frame_put,
+            #     subframe,
+            #     block_size_,
+            #     sample_size,
+            #     parameters.rice_partition_order
+            # )
+
+            _put_subframe_lpc(
                 frame_put,
                 subframe,
                 block_size_,
@@ -285,12 +297,13 @@ def encode_subframe_fixed(
         # Find best fixed predictor order for the given samples
         residuals = [
             prediction_residual(samples, coefficients)
-            for o, coefficients in enumerate(FIXED_PREDICTOR_COEFFICIENTS)
+            for coefficients in FIXED_PREDICTOR_COEFFICIENTS
         ]
 
         # mypy infers the type of total_error is Any, not sure why.
         # Explicitly declaring the type for the moment, but might be an hint
         # for a possible bug.
+        # TODO: investigate further
         total_error: list[int] = [sum(abs(r) for r in rs) for rs in residuals]
 
         order = min(range(len(total_error)), key=lambda x: total_error[x])
@@ -304,11 +317,192 @@ def encode_subframe_fixed(
     return (header, subframe)
 
 
-def prediction_residual(samples, coefficients):
+def encode_subframe_lpc(
+        samples: list[int],
+        lpc_order: range,
+        precision: int
+) -> tuple[SubframeHeader, SubframeLPC]:
+    # 1. Samples apodization to improve Levinson-Durbin algorithm stability
+    windowed = [x * w for x, w in zip(samples, tukey(len(samples), 0.5))]
+
+    # 2. Compute autocorrelation
+    autocorrs = [autocorrelation(windowed, i) for i in range(lpc_order.stop)]
+
+    # 3. Get floating point coefficients
+    coefficients = [levinson_durbin(autocorrs[:i])
+                    for i in range(2, lpc_order.stop + 1)]
+
+    # 4. Quantize coefficients. Get integer coefficients and shift
+    quantized_coefficients_and_shift = [
+        quantize_lpc_coefficients(coefficient, precision)
+        for coefficient in coefficients
+    ]
+
+    quantized_coefficients = [x[0] for x in quantized_coefficients_and_shift]
+    shifts = [x[1] for x in quantized_coefficients_and_shift]
+
+    # 5. Compute residuals for each set of coefficients
+    residuals = [
+        prediction_residual(samples, coeffs, shift)
+        for coeffs, shift in quantized_coefficients_and_shift
+    ]
+
+    # 6. Compute total error for each set of coefficients.
+    #
+    # mypy infers the type of total_error is Any, not sure why.
+    # Explicitly declaring the type for the moment, but might be an hint
+    # for a possible bug.
+    # TODO: investigate further
+    total_error: list[int] = [sum(abs(r) for r in rs) for rs in residuals]
+
+    # 7. Find best set of coefficients.
+    # Beware: order is actually the index into coefficients,
+    # quantized_coefficients, shifts and residuals, not really the order.
+    # The actual order is order + 1.
+    order = min(range(len(total_error)), key=lambda x: total_error[x])
+
+    coeffs = quantized_coefficients[order]
+    shift = shifts[order]
+
+    warmup = samples[:order]
+    residual = residuals[order]
+
+    header = SubframeHeader(SubframeTypeLPC(order=order + 1), 0)
+    subframe = SubframeLPC(
+        warmup=samples[:order + 1],
+        precision=precision,
+        shift=shift,
+        coefficients=coeffs,
+        residual=residual
+    )
+
+    return (header, subframe)
+
+
+def tukey(
+        n: int,  # window size
+        r: float  # cosine fraction, often referred to as alpha
+) -> list[float]:
+    # Given that I found way too many definitions for the Tukey window,
+    # sometimes even supposedly not correct (thanks Wikipedia), the following
+    # code is shamelessly stolen from libflac, window.c, FLAC__window_tukey.
+    nr = floor(r / 2.0 * n) - 1
+
+    # Start with a rectangle window...
+    xs = [1.0] * n
+
+    # ... replace ends with Hann window
+    for i in range(nr + 1):
+        xs[i] = 0.5 - 0.5 * cos(pi * i / nr)
+        xs[n - nr - 1 + i] = 0.5 - 0.5 * cos(pi * (i + nr) / nr)
+
+    return xs
+
+
+def autocorrelation(
+        samples: list[float],
+        lag: int
+) -> float:
+    return sum(
+        samples[j] * samples[j + lag]
+        for j in range(len(samples) - lag - 1)
+    )
+
+
+def levinson_durbin(
+        xs: list[float],  # autocorrelation values
+) -> list[float]:
+    assert len(xs) > 1
+    
+    order = len(xs) - 1
+    coefs = [0.0] * (order + 1)
+    coefs[0] = 1.0
+    error = xs[0]
+
+    for k in range(order):
+        lambda_ = 0.0
+
+        for j in range(k + 1):
+            lambda_ -= coefs[j] * xs[k + 1 - j]
+
+        lambda_ /= error
+
+        for n in range((k + 1) // 2 + 1):
+            temp = coefs[k + 1 - n] + lambda_ * coefs[n]
+            coefs[n] = coefs[n] + lambda_ * coefs[k + 1 - n]
+            coefs[k + 1 - n] = temp
+
+        error *= 1.0 - lambda_ ** 2
+
+    # return coefs[1:], error
+    return coefs[1:]
+
+
+def quantize_lpc_coefficients(
+        coefficients: list[float],
+        precision: int,
+) -> tuple[list[int], int]:  # coefficients at list of integers, shift
+    # Code stolen from libFLAC, lpc.c, FLAC__lpc_quantize_coefficients.
+    # Beware: very not Pythonic code follows.
+    # TODO: refactor this mess.
+
+    # 5 is the min precision value that can be used
+    # TODO: extract this constant?
+    assert precision >= 5
+
+    # 1. Compute the shift value
+    coef_max = max([abs(x) for x in coefficients])
+    assert coef_max > 0.0
+
+    # 5 is the size of the shift field in the binary representation
+    # TODO: extract these kind of constants?
+    shift_max = (1 << (5 - 1)) - 1
+    shift_min = - (1 << (5 - 1))
+    
+    shift = precision - floor(log2(coef_max)) - 2
+
+    if shift > shift_max:
+        shift = shift_max
+    elif shift < shift_min:
+        assert False
+
+    # 2. Compute the quantized coefficients
+    qlp_max = (1 << (precision - 1)) - 1
+    qlp_min = - (1 << (precision - 1))
+
+    quantized_coefficients = []
+    error = 0.0
+
+    if shift >= 0:
+        for coefficient in coefficients:
+            error += coefficient * (1 << shift)
+            q = clamp(round(error), qlp_min, qlp_max)
+            error -= q  # BEWARE: operaton between float and int, even if safe
+            quantized_coefficients.append(q)
+    else:
+        # Negative shift is very rave but possible. Due to a design flaw in FLAC,
+        # negative shift is not allowed in the decoder, so it must specially
+        # handled by scaling down the coefficients.
+        nshift = - shift
+        for coefficient in coefficients:
+            error += coefficient * (1 << nshift)
+            q = clamp(round(error), qlp_min, qlp_max)
+            error -= q  # BEWARE: operaton between float and int, even if safe
+        shift = 0
+
+    return quantized_coefficients, shift
+
+
+def prediction_residual(
+        samples: list[int],
+        coefficients: Sequence[int],
+        shift: int = 0
+) -> list[int]:
     order = len(coefficients)
     return [
         (samples[i]
-         - sum(samples[i - 1 - j] * c for j, c in enumerate(coefficients)))
+         - (sum(samples[i - 1 - j] * c for j, c in enumerate(coefficients))
+            >> shift))
         for i in range(order, len(samples))
     ]
 
@@ -360,6 +554,35 @@ def _put_subframe_fixed(
 
     for s in subframe.warmup:
         put.uint(s, sample_size)  # signed int actually
+    put_residual(put, residual, sample_size)
+
+
+def _put_subframe_lpc(
+        put: Put,
+        subframe: SubframeLPC,
+        block_size: int,
+        sample_size: int,
+        partition_order_range: range
+):
+    residual = encode_residual(
+        subframe.residual,
+        block_size,
+        sample_size,
+        subframe.order,
+        partition_order_range
+    )
+
+    for s in subframe.warmup:
+        put.uint(s, sample_size)  # signed int actually
+
+    assert subframe.precision - 1 != 0b1111
+    put.uint(subframe.precision - 1, 4)
+
+    put.uint(subframe.shift, 5)  # signed int actually
+
+    for c in subframe.coefficients:
+        put.uint(c, subframe.precision)  # signed int actually
+
     put_residual(put, residual, sample_size)
 
 

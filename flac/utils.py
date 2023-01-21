@@ -40,6 +40,14 @@ def batch(it: Iterator[T], n: int) -> Iterator[list[T]]:
         yield batch
 
 
+def clamp(
+        x: int,  # value to be clamped
+        a: int,  # lower bound
+        b: int  # upper bound
+) -> int:
+    return min(max(x, a), b)
+
+
 @overload
 def group(xs: bytes, n: int) -> list[bytes]:
     ...
@@ -82,6 +90,7 @@ def zigzag_decode(x: int) -> int:
 
 def zigzag_encode(x: int, n: int) -> int:
     assert n > 0
+    n = 32
     assert (-1 << (n - 1)) < x < (1 << n) - 1
     return (x >> (n - 1)) ^ (x << 1)
 
